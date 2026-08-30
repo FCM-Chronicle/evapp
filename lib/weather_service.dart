@@ -62,7 +62,7 @@ class WeatherService {
         }
       }
       
-      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high, timeLimit: const Duration(seconds: 5));
       final grid = _latLngToGrid(position.latitude, position.longitude);
       final nx = grid['nx']!;
       final ny = grid['ny']!;
@@ -81,7 +81,7 @@ class WeatherService {
       }
       final baseTime = "${baseHour.toString().padLeft(2, '0')}30"; // 초단기예보는 45분 이후 호출, base_time은 매시 30분
 
-      final url = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtFcst?serviceKey=$apiKey&pageNo=1&numOfRows=60&dataType=JSON&base_date=$baseDate&base_time=$baseTime&nx=$nx&ny=$ny";
+      final url = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtFcst?serviceKey=$apiKey&pageNo=1&numOfRows=60&dataType=JSON&base_date=$baseDate&base_time=$baseTime&nx=$nx&ny=$ny";
       
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
@@ -92,7 +92,7 @@ class WeatherService {
           final ptyItem = items.firstWhere((item) => item['category'] == 'PTY', orElse: () => null);
           if (ptyItem != null) {
             final ptyVal = ptyItem['fcstValue'];
-            if (ptyVal != "0") {
+            if (ptyVal != null && ptyVal != "0") {
               return "학원 갈 시간이야! 🌧 밖에 비나 눈이 올 수 있으니까 우산 꼭 챙겨!";
             } else {
               return "학원 갈 시간이야! ☀ 밖은 맑거나 흐리기만 하니 조심히 다녀와.";

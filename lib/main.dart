@@ -14,7 +14,6 @@ import 'llm_service.dart';
 import 'local_storage_service.dart';
 import 'document_service.dart';
 import 'slide_viewer_page.dart';
-import 'notification_filter.dart';
 import 'local_asset_server.dart'; // 새로 추가한 로컬 서버
 import 'ocr_service.dart';
 import 'package:network_info_plus/network_info_plus.dart';
@@ -100,18 +99,23 @@ class _EVHomePageState extends State<EVHomePage> {
     debugPrint('Processing shared image: $path');
     try {
       _sendToReact('shared_image_processing', {'state': 'start'});
-      final ocrText = await OcrService.extractTextFromPath(path);
-      if (ocrText == null || ocrText.trim().isEmpty) {
-        _sendToReact('shared_image_result', {'success': false, 'error': '이미지에서 텍스트를 파싱하지 못했습니다.'});
-        return;
-      }
+      final file = File(path);
+      final bytes = await file.readAsBytes();
+      final base64Image = 'data:image/${path.split('.').last};base64,${base64Encode(bytes)}';
 
-      final processed = await LlmService.processOcrForWrongNote(ocrText);
+      // Vision AI 직접 호출 (텍스트+수식+도형 원스톱 분석)
+      final processed = await LlmService.processOcrForWrongNoteImage(base64Image);
       if (processed == null) {
         _sendToReact('shared_image_result', {'success': false, 'error': 'AI가 이미지를 분석하는 데 실패했습니다.'});
         return;
       }
 
+      _sendToReact('shared_ocr_result', {
+        'success': true,
+        'subject': processed['subject'] ?? '기타',
+        'problem': processed['problem'] ?? '',
+        'solution': processed['solution'] ?? '',
+      });
       _sendToReact('shared_image_result', {
         'success': true,
         'subject': processed['subject'] ?? '기타',
@@ -120,6 +124,7 @@ class _EVHomePageState extends State<EVHomePage> {
       });
     } catch (e) {
       debugPrint('processSharedImage error: $e');
+      _sendToReact('shared_ocr_result', {'success': false, 'error': e.toString()});
       _sendToReact('shared_image_result', {'success': false, 'error': e.toString()});
     }
   }
@@ -136,6 +141,8 @@ class _EVHomePageState extends State<EVHomePage> {
         }
       }
     });
+
+    // S펜 공유 이미지는 app_ready 이벤트 수신 시점에 처리 (React가 완전히 로드된 후)
 
 
 
@@ -355,31 +362,7 @@ class _EVHomePageState extends State<EVHomePage> {
     });
 
     // Listen to native notifications and metadata events
-    const EventChannel('com.example.evapp/notifications').receiveBroadcastStream().listen((event) {
-      if (event is Map) {
-        final pkg = event['package'];
-        final title = event['title'];
-        final text = event['text'];
-        final album = event['album'];
-        final artUrl = event['artUrl'];
-
-        if (artUrl != null && pkg == 'in.krosbits.musicolet') {
-          // This is music metadata
-          _sendToReact('music_metadata', {
-            'title': title,
-            'artist': text,
-            'album': album,
-            'artUrl': artUrl,
-          });
-        } else {
-          // Pass to custom filter engine
-          final filtered = NotificationFilter.filter(pkg, title, text, album);
-          if (filtered != null) {
-            _sendToReact('custom_notification', filtered);
-          }
-        }
-      }
-    });
+    // [H8 수정] 중복 EventChannel 리스너 제거 — 위의 리스너가 이미 알림/음악을 처리함
   }
 
   // assets/web/index.html을 file://이 아니라 http://127.0.0.1:PORT/index.html
@@ -417,14 +400,19 @@ class _EVHomePageState extends State<EVHomePage> {
           }
         }
       } else if (action == 'user_message') {
-        final String? text = payload['text'] as String?;
+        String text = (payload['text'] as String?) ?? '';
         final source = payload['source'];
         final msgId = payload['id'];
         final String? attachmentBase64 = payload['attachmentBase64'] as String?;
         debugPrint('Action: process user message from $source: $text');
 
-        if (text == null || text.trim().isEmpty) {
+        final hasImage = attachmentBase64 != null && attachmentBase64.isNotEmpty;
+        if (text.trim().isEmpty && !hasImage) {
           return;
+        }
+        // 이미지만 첨부하고 텍스트를 입력하지 않은 경우 기본 프롬프트 주입
+        if (text.trim().isEmpty && hasImage) {
+          text = '이 이미지를 분석해줘';
         }
 
         // 실제 NVIDIA NIM API를 통해 응답 생성. 이전 대화(_conversationHistory)를
@@ -459,14 +447,16 @@ class _EVHomePageState extends State<EVHomePage> {
               : null,
         });
 
-        // AI가 <update_calendar> 태그로 실제 일정 변경을 판단했을 때만 온다.
-        // 예전처럼 React가 사용자 문장을 정규식으로 흉내내서 캘린더를 고치는
-        // 게 아니라, calendar.json에 실제로 반영된 결과를 그대로 화면에 반영한다.
+        // AI가 <update_calendar> 태그로 실제 일정 변경을 판단했을 때
         if (response.calendarEvents != null) {
           _sendToReact('calendar_sync', {'events': response.calendarEvents});
         }
         if (response.updatedMemories != null) {
           _sendToReact('memories_sync', {'content': response.updatedMemories, 'success': true});
+        }
+        if (response.updatedTodo != null) {
+          final todoContent = await LocalStorageService.readTodo();
+          _sendToReact('todo_sync', {'content': todoContent, 'items': response.updatedTodo, 'success': true});
         }
 
         // AI가 <generate_document> 태그로 실제 슬라이드/PDF를 만들었을 때만
@@ -566,9 +556,16 @@ class _EVHomePageState extends State<EVHomePage> {
         const MethodChannel('com.example.evapp/methods').invokeMethod('pauseMusic');
       } else if (action == 'perform_ocr') {
         debugPrint('Action: perform_ocr');
-        final text = await OcrService.pickImageAndExtractText();
-        if (text != null && text.isNotEmpty) {
-          _sendToReact('ocr_result', {'text': text});
+        try {
+          final text = await OcrService.pickImageAndExtractText();
+          if (text != null && text.isNotEmpty) {
+            _sendToReact('ocr_result', {'success': true, 'text': text});
+          } else {
+            _sendToReact('ocr_result', {'success': false, 'error': '텍스트를 인식하지 못했거나 취소되었습니다.'});
+          }
+        } catch (e) {
+          debugPrint('perform_ocr error: $e');
+          _sendToReact('ocr_result', {'success': false, 'error': e.toString()});
         }
       } else if (action == 'pick_directory') {
         debugPrint('Action: pick_directory');
@@ -628,27 +625,45 @@ class _EVHomePageState extends State<EVHomePage> {
         if (saved.isNotEmpty) {
           _conversationHistory.clear();
           _conversationHistory.addAll(saved);
+          _sendToReact('conversation_history', {'history': saved});
           _sendToReact('conversation_sync_init', {'history': saved});
         }
 
+        final archives = await LocalStorageService.listArchives();
+        _sendToReact('archives_sync', {'archives': archives});
+        _sendToReact('archives_list', {'archives': archives});
+
         final prefs = await SharedPreferences.getInstance();
         _sendToReact('sports_settings_sync', {
+          'sportType': prefs.getString('SPORTS_TYPE') ?? 'football',
           'apiKey': prefs.getString('API_FOOTBALL_KEY') ?? '',
+          'firecrawlKey': prefs.getString('FIRECRAWL_API_KEY') ?? '',
           'teamName': prefs.getString('SPORTS_TEAM_NAME') ?? '',
           'active': prefs.getBool('SPORTS_ACTIVE') ?? false,
         });
 
         _sendToReact('settings_sync', {
           'llmKey': prefs.getString('NVIDIA_NIM_API_KEY') ?? '',
+          'visionKey': prefs.getString('VISION_API_KEY') ?? '',
           'naverClientId': prefs.getString('NAVER_CLIENT_ID') ?? '',
           'naverClientSecret': prefs.getString('NAVER_CLIENT_SECRET') ?? '',
           'tavilyKey': prefs.getString('TAVILY_API_KEY') ?? '',
+          'firecrawlKey': prefs.getString('FIRECRAWL_API_KEY') ?? '',
           'visionEnabled': prefs.getBool('VISION_ENABLED') ?? true,
           'llmEndpoint': prefs.getString('LLM_ENDPOINT') ?? '',
+          'visionEndpoint': prefs.getString('VISION_ENDPOINT') ?? '',
           'llmModel': prefs.getString('LLM_MODEL') ?? '',
+          'visionModel': prefs.getString('LLM_VISION_MODEL') ?? 'meta/llama-3.2-11b-vision-instruct',
           'kmaKey': prefs.getString('KMA_API_KEY') ?? '',
           'ttsKey': prefs.getString('TTS_API_KEY') ?? '',
           'ttsEndpoint': prefs.getString('TTS_ENDPOINT') ?? '',
+          'footballDataKey': prefs.getString('FOOTBALL_DATA_API_KEY') ?? '',
+          'obsidianVaultPath': prefs.getString('OBSIDIAN_VAULT_PATH') ?? '',
+          'obsidianInboxPath': prefs.getString('OBSIDIAN_INBOX_PATH') ?? prefs.getString('OBSIDIAN_PATH') ?? '',
+          'obsidianPath': prefs.getString('OBSIDIAN_PATH') ?? '',
+          'playlistPath': prefs.getString('PLAYLIST_PATH') ?? '',
+          'footballTeams': prefs.getString('FOOTBALL_TEAMS') ?? '',
+          'baseballTeams': prefs.getString('BASEBALL_TEAMS') ?? '',
         });
 
         final wrongNotes = await LocalStorageService.readWrongNotes();
@@ -656,6 +671,10 @@ class _EVHomePageState extends State<EVHomePage> {
 
         final maskingRules = await LocalStorageService.readMaskingRules();
         _sendToReact('masking_rules_sync', {'rules': maskingRules});
+
+        final todoContent = await LocalStorageService.readTodo();
+        final todoItems = await LocalStorageService.readTodoItems();
+        _sendToReact('todo_sync_init', {'content': todoContent, 'items': todoItems});
 
         final String? cachedImage = await const MethodChannel('com.example.evapp/methods').invokeMethod('getSharedImage');
         if (cachedImage != null) {
@@ -676,23 +695,50 @@ class _EVHomePageState extends State<EVHomePage> {
           _sendToReact('masking_rules_sync', {'rules': rules, 'success': true});
         }
       } else if (action == 'save_sports_settings') {
+        final prefs = await SharedPreferences.getInstance();
+        // 새로운 SportsSettingsScreen에서 오는 payload
+        final footballTeams = payload['footballTeams'];
+        final baseballTeams = payload['baseballTeams'];
+        final footballDataKey = payload['footballDataKey'];
+        if (footballTeams != null) await prefs.setString('FOOTBALL_TEAMS', footballTeams);
+        if (baseballTeams != null) await prefs.setString('BASEBALL_TEAMS', baseballTeams);
+        if (footballDataKey != null) await prefs.setString('FOOTBALL_DATA_API_KEY', footballDataKey);
+        // 기존 호환용 payload
+        final sportType = payload['sportType'];
         final apiKey = payload['apiKey'];
+        final firecrawlKey = payload['firecrawlKey'];
         final teamName = payload['teamName'];
         final active = payload['active'];
-        final prefs = await SharedPreferences.getInstance();
+        if (sportType != null) await prefs.setString('SPORTS_TYPE', sportType);
         if (apiKey != null) await prefs.setString('API_FOOTBALL_KEY', apiKey);
+        if (firecrawlKey != null) await prefs.setString('FIRECRAWL_API_KEY', firecrawlKey);
         if (teamName != null) await prefs.setString('SPORTS_TEAM_NAME', teamName);
         if (active != null) await prefs.setBool('SPORTS_ACTIVE', active);
       } else if (action == 'get_sports_settings') {
         final prefs = await SharedPreferences.getInstance();
         _sendToReact('sports_settings_sync', {
+          'sportType': prefs.getString('SPORTS_TYPE') ?? 'football',
           'apiKey': prefs.getString('API_FOOTBALL_KEY') ?? '',
+          'firecrawlKey': prefs.getString('FIRECRAWL_API_KEY') ?? '',
           'teamName': prefs.getString('SPORTS_TEAM_NAME') ?? '',
           'active': prefs.getBool('SPORTS_ACTIVE') ?? false,
         });
       } else if (action == 'get_archives') {
         final archives = await LocalStorageService.listArchives();
+        _sendToReact('archives_sync', {'archives': archives});
         _sendToReact('archives_list', {'archives': archives});
+      } else if (action == 'rename_archive') {
+        final path = payload['path'] as String?;
+        final newTitle = payload['title'] as String?;
+        if (path != null && newTitle != null) {
+          final ok = await LocalStorageService.renameArchive(path, newTitle);
+          if (ok) {
+            // 변경 후 목록 갱신
+            final archives = await LocalStorageService.listArchives();
+            _sendToReact('archives_sync', {'archives': archives});
+            _sendToReact('archives_list', {'archives': archives});
+          }
+        }
       } else if (action == 'get_wrong_notes') {
         final wrongNotes = await LocalStorageService.readWrongNotes();
         _sendToReact('wrong_notes_sync', {'notes': wrongNotes});
@@ -708,37 +754,59 @@ class _EVHomePageState extends State<EVHomePage> {
           final ok = await LocalStorageService.writeScheduleEvents(schedule);
           _sendToReact('schedule_sync', {'schedule': schedule, 'success': ok});
         }
-      } else if (action == 'export_pdf') {
-        debugPrint('Action: export_pdf');
-        final path = payload['path'];
-        if (path != null) {
-          // You need the share_plus package to share the file, which is already in pubspec.yaml
-          // import 'package:share_plus/share_plus.dart'; is needed at the top of main.dart
-          // Alternatively, we can use open_file but share_plus is in pubspec
+      } else if (action == 'get_todo') {
+        final todoContent = await LocalStorageService.readTodo();
+        final todoItems = await LocalStorageService.readTodoItems();
+        _sendToReact('todo_sync', {'content': todoContent, 'items': todoItems});
+      } else if (action == 'save_todo_items') {
+        final items = payload['items'];
+        if (items != null && items is List) {
+          final ok = await LocalStorageService.writeTodoItems(items);
+          final todoContent = await LocalStorageService.readTodo();
+          final updatedItems = await LocalStorageService.readTodoItems();
+          _sendToReact('todo_sync', {'content': todoContent, 'items': updatedItems, 'success': ok});
         }
-      } else if (action == 'export_slide') {
-        debugPrint('Action: export_slide');
-        final path = payload['path'];
-        if (path != null) {
-           Navigator.of(context).push(MaterialPageRoute(
-             builder: (_) => SlideViewerPage(htmlFilePath: path, title: "Slide Presentation"),
-           ));
+      } else if (action == 'save_todo_raw') {
+        final content = payload['content'] as String? ?? '';
+        final ok = await LocalStorageService.writeTodo(content);
+        final updatedItems = await LocalStorageService.readTodoItems();
+        _sendToReact('todo_sync', {'content': content, 'items': updatedItems, 'success': ok});
+      } else if (action == 'toggle_todo') {
+        final index = payload['index'] as int?;
+        if (index != null) {
+          final items = await LocalStorageService.toggleTodoItem(index);
+          final todoContent = await LocalStorageService.readTodo();
+          _sendToReact('todo_sync', {'content': todoContent, 'items': items, 'success': true});
         }
-      } else if (action == 'perform_ocr') {
-        debugPrint('Action: perform_ocr');
+      } else if (action == 'delete_todo') {
+        final index = payload['index'] as int?;
+        if (index != null) {
+          final items = await LocalStorageService.deleteTodoItem(index);
+          final todoContent = await LocalStorageService.readTodo();
+          _sendToReact('todo_sync', {'content': todoContent, 'items': items, 'success': true});
+        }
+      } else if (action == 'add_todo') {
+        final text = payload['text'] as String? ?? '';
+        if (text.trim().isNotEmpty) {
+          final items = await LocalStorageService.appendTodoItem(text);
+          final todoContent = await LocalStorageService.readTodo();
+          _sendToReact('todo_sync', {'content': todoContent, 'items': items, 'success': true});
+        }
+      } else if (action == 'capture_screen_query') {
+        debugPrint('Action: capture_screen_query');
         try {
           final picker = ImagePicker();
           final pickedFile = await picker.pickImage(source: ImageSource.gallery);
           if (pickedFile != null) {
             final bytes = await pickedFile.readAsBytes();
             final base64Image = 'data:image/${pickedFile.name.split('.').last};base64,${base64Encode(bytes)}';
-            final text = await LlmService.extractTextFromImage(base64Image);
-            if (text != null && text.isNotEmpty) {
-              _sendToReact('ocr_result', {'text': text});
-            }
+            _sendToReact('chat_image_picked', {
+              'name': '화면_캡처_${pickedFile.name}',
+              'base64': base64Image,
+            });
           }
         } catch (e) {
-          debugPrint('perform_ocr error: $e');
+          debugPrint('capture_screen_query error: $e');
         }
       } else if (action == 'pick_image_for_chat') {
         debugPrint('Action: pick_image_for_chat');
@@ -763,6 +831,7 @@ class _EVHomePageState extends State<EVHomePage> {
           final pickedFile = await picker.pickImage(source: ImageSource.gallery);
           if (pickedFile == null) {
             _sendToReact('wrong_ocr_result', {'success': false, 'error': '취소되었습니다.'});
+            _sendToReact('wrong_ocr_error', {'message': '취소되었습니다.'});
             return;
           }
           final bytes = await pickedFile.readAsBytes();
@@ -771,6 +840,7 @@ class _EVHomePageState extends State<EVHomePage> {
           final processed = await LlmService.processOcrForWrongNoteImage(base64Image);
           if (processed == null) {
             _sendToReact('wrong_ocr_result', {'success': false, 'error': 'AI가 이미지를 분석하지 못했습니다.'});
+            _sendToReact('wrong_ocr_error', {'message': 'AI가 이미지를 분석하지 못했습니다.'});
             return;
           }
 
@@ -787,10 +857,12 @@ class _EVHomePageState extends State<EVHomePage> {
           await LocalStorageService.writeWrongNotes(current);
           
           _sendToReact('wrong_notes_sync', {'notes': current});
+          _sendToReact('wrong_note_added', {'notes': current, 'note': newNote});
           _sendToReact('wrong_ocr_result', {'success': true, 'note': newNote});
         } catch (e) {
           debugPrint('perform_wrong_ocr error: $e');
           _sendToReact('wrong_ocr_result', {'success': false, 'error': e.toString()});
+          _sendToReact('wrong_ocr_error', {'message': e.toString()});
         }
       } else if (action == 'arrest_villain') {
         final id = payload['id'];
@@ -830,13 +902,22 @@ class _EVHomePageState extends State<EVHomePage> {
           final saved = await LocalStorageService.readConversationHistory();
           _conversationHistory.clear();
           _conversationHistory.addAll(saved);
+          _sendToReact('conversation_history', {'history': saved});
           _sendToReact('conversation_sync_init', {'history': saved});
         }
       } else if (action == 'save_paths') {
+        final obsidianVaultPath = payload['obsidianVaultPath'];
+        final obsidianInboxPath = payload['obsidianInboxPath'];
         final obsidianPath = payload['obsidianPath'];
         final playlistPath = payload['playlistPath'];
         debugPrint('Action: save paths');
         final prefs = await SharedPreferences.getInstance();
+        if (obsidianVaultPath != null && obsidianVaultPath.isNotEmpty) {
+          await prefs.setString('OBSIDIAN_VAULT_PATH', obsidianVaultPath);
+        }
+        if (obsidianInboxPath != null && obsidianInboxPath.isNotEmpty) {
+          await prefs.setString('OBSIDIAN_INBOX_PATH', obsidianInboxPath);
+        }
         if (obsidianPath != null && obsidianPath.isNotEmpty) {
           await prefs.setString('OBSIDIAN_PATH', obsidianPath);
         }
@@ -846,26 +927,36 @@ class _EVHomePageState extends State<EVHomePage> {
         _sendToReact('paths_saved', {'success': true});
       } else if (action == 'save_api_key') {
         final key = payload['key'];
+        final visionKey = payload['visionKey'];
         final naverClientId = payload['naverClientId'];
         final naverClientSecret = payload['naverClientSecret'];
         final tavilyKey = payload['tavilyKey'];
+        final firecrawlKey = payload['firecrawlKey'];
         final visionEnabled = payload['visionEnabled'];
         final endpoint = payload['endpoint'];
+        final visionEndpoint = payload['visionEndpoint'];
         final model = payload['model'];
+        final visionModel = payload['visionModel'];
         final obsidianPath = payload['obsidianPath'];
         final kmaKey = payload['kmaKey'];
         final ttsKey = payload['ttsKey'];
         final ttsEndpoint = payload['ttsEndpoint'];
+        final footballDataKey = payload['footballDataKey'];
         debugPrint('Action: save API keys');
         // Save to SharedPreferences
         final prefs = await SharedPreferences.getInstance();
         if (key != null) await prefs.setString('NVIDIA_NIM_API_KEY', key);
+        if (visionKey != null) await prefs.setString('VISION_API_KEY', visionKey);
         if (naverClientId != null) await prefs.setString('NAVER_CLIENT_ID', naverClientId);
         if (naverClientSecret != null) await prefs.setString('NAVER_CLIENT_SECRET', naverClientSecret);
         if (tavilyKey != null) await prefs.setString('TAVILY_API_KEY', tavilyKey);
+        if (firecrawlKey != null) await prefs.setString('FIRECRAWL_API_KEY', firecrawlKey);
         if (visionEnabled != null && visionEnabled is bool) await prefs.setBool('VISION_ENABLED', visionEnabled);
         if (endpoint != null) await prefs.setString('LLM_ENDPOINT', endpoint);
+        if (visionEndpoint != null) await prefs.setString('VISION_ENDPOINT', visionEndpoint);
         if (model != null) await prefs.setString('LLM_MODEL', model);
+        if (visionModel != null) await prefs.setString('LLM_VISION_MODEL', visionModel);
+        if (footballDataKey != null) await prefs.setString('FOOTBALL_DATA_API_KEY', footballDataKey);
         if (obsidianPath != null) await prefs.setString('OBSIDIAN_PATH', obsidianPath);
         if (kmaKey != null) await prefs.setString('KMA_API_KEY', kmaKey);
         if (ttsKey != null) await prefs.setString('TTS_API_KEY', ttsKey);
@@ -890,6 +981,7 @@ class _EVHomePageState extends State<EVHomePage> {
           'problem': problem,
           'solution': solution,
           'created_at': DateTime.now().toIso8601String(),
+          'status': 'active', // 'active' (빌런) or 'prison' (래프트 수감)
         };
         current.add(newNote);
         await LocalStorageService.writeWrongNotes(current);
@@ -908,7 +1000,7 @@ class _EVHomePageState extends State<EVHomePage> {
               await LocalStorageService.writeConversationHistory(_conversationHistory);
               _sendToReact('conversation_sync_init', {'history': _conversationHistory});
 
-              final llmResponse = await LlmService.generateResponse(text);
+              final llmResponse = await LlmService.generateResponse(text, history: _conversationHistory);
               
               _conversationHistory.add({'role': 'assistant', 'content': llmResponse.text});
               await LocalStorageService.writeConversationHistory(_conversationHistory);

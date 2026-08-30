@@ -1,3 +1,4 @@
+import 'weekly_summary_service.dart';
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'obsidian_service.dart';
 import 'local_storage_service.dart';
 import 'notification_service.dart';
 import 'weather_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'sports_service.dart';
 
 Future<void> initializeService() async {
@@ -61,13 +63,11 @@ void onStart(ServiceInstance service) async {
   });
   
   final Map<String, DateTime> _lastScheduleTriggers = {};
-  DateTime? _lastDDayPush;
-  DateTime? _lastNightRoutine;
-  DateTime? _lastTodoReset;
-  DateTime? _lastSportsBriefing;
 
   Timer.periodic(const Duration(minutes: 1), (timer) async {
     final now = DateTime.now();
+    final todayStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    final prefs = await SharedPreferences.getInstance();
 
     // 1. Check schedule.json
     final schedules = await LocalStorageService.readScheduleEvents();
@@ -101,8 +101,8 @@ void onStart(ServiceInstance service) async {
 
     // 2. D-Day Smart Push (09:00)
     if (now.hour == 9 && now.minute == 0) {
-      if (_lastDDayPush == null || _lastDDayPush!.day != now.day) {
-        _lastDDayPush = now;
+      if (prefs.getString('LAST_DDAY_PUSH_DATE') != todayStr) {
+        await prefs.setString('LAST_DDAY_PUSH_DATE', todayStr);
         final events = await LocalStorageService.readCalendarEvents();
         List<String> dDayMessages = [];
         
@@ -141,24 +141,31 @@ void onStart(ServiceInstance service) async {
 
     // 2.5 Todo Daily Reset (02:00)
     if (now.hour == 2 && now.minute == 0) {
-      if (_lastTodoReset == null || _lastTodoReset!.day != now.day) {
-        _lastTodoReset = now;
+      if (prefs.getString('LAST_TODO_RESET_DATE') != todayStr) {
+        await prefs.setString('LAST_TODO_RESET_DATE', todayStr);
         await LocalStorageService.resetTodoDaily();
         await NotificationService.showNotification("Todo 초기화", "오전 2시가 되어 어제 완료된 할 일들을 정리했습니다.");
       }
     }
 
+        // 5. Sunday Weekly Executive Summary (21:00)
+    if (now.weekday == DateTime.sunday && now.hour == 21 && now.minute == 0) {
+      if (prefs.getString('LAST_WEEKLY_SUMMARY_DATE') != todayStr) {
+        await WeeklySummaryService.generateWeeklyReport();
+      }
+    }
+
     // 4. Sports Morning Briefing (07:00)
     if (now.hour == 7 && now.minute == 0) {
-      if (_lastSportsBriefing == null || _lastSportsBriefing!.day != now.day) {
-        _lastSportsBriefing = now;
+      if (prefs.getString('LAST_SPORTS_DATE') != todayStr) {
+        await prefs.setString('LAST_SPORTS_DATE', todayStr);
         await SportsService.generateMorningBriefing();
       }
     }
     // 3. Night Routine Check-in (00:30)
     if (now.hour == 0 && now.minute == 30) {
-      if (_lastNightRoutine == null || _lastNightRoutine!.day != now.day) {
-        _lastNightRoutine = now;
+      if (prefs.getString('LAST_NIGHT_ROUTINE_DATE') != todayStr) {
+        await prefs.setString('LAST_NIGHT_ROUTINE_DATE', todayStr);
         final prompt = "지금은 밤 12시 30분이야. 달력을 보고 내일 첫 일정을 브리핑해주거나, 오늘 남은 할 일이 있는지 물어보는 메시지를 작성해줘.\n"
             "★중요★ 반드시 '데일리 뷰글(Daily Bugle)' 신문 1면 기사 스타일로 작성해! "
             "첫 줄은 굵고 강렬한 야간 특종 뉴스 헤드라인(예: [심야 특보! ...])을 쓰고, 그 아래에 기사 본문처럼 짧게 브리핑을 해줘.";

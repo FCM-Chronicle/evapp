@@ -1,0 +1,35 @@
+/* E.V. UI 스타일 가이드 §3 타이포그래피: Inter(본문/UI) + JetBrains Mono(라벨/상태값).
+   컴포넌트 쪽 mono/sans 스타일 객체가 이 두 폰트를 fontFamily로 참조하므로,
+   여기서 실제 웹폰트를 로드해줘야 시스템 폰트로 폴백되지 않는다. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+/* 가이드 §2 컬러 팔레트: 배경(#050506) · 본문 텍스트(#F2F2F0) 기본값.
+   컴포넌트 대부분이 인라인 style로 색을 직접 지정하지만, 폰트 로딩 전
+   깜빡임이나 인라인 스타일이 없는 여백 영역을 위한 안전한 기본값이다. */
+html,
+body {
+    background: #050506;
+    color: #F2F2F0;
+    font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+/* 높이 체인을 확실히 잡아준다. 일부 태블릿 웹뷰는 100dvh를 못 알아듣고
+   그냥 무시해버리는 경우가 있어서, 그 경우 부모 높이가 정의되지 않은 채로
+   내려가다가 결국 0에 수렴 → 절대배치된 코너 브라켓들이 전부 한 지점(위쪽)
+   으로 몰려버리는 원인이 된다. html/body/#root에 명시적으로 100% 높이를
+   깔아주고, app-shell 클래스는 100vh를 먼저 적용한 뒤 100dvh로 덮어써서
+   dvh 미지원 환경에서도 100vh로 안전하게 폴백되게 한다. */
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+}
+
+.app-shell {
+    height: 100vh;
+    height: 100dvh;
+}

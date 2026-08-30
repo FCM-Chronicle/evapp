@@ -21,12 +21,14 @@ class LlmResponse {
   final List<Map<String, dynamic>>? calendarEvents;
   final GeneratedDocument? document;
   final String? updatedMemories;
+  final List<Map<String, dynamic>>? updatedTodo;
 
   const LlmResponse(
     this.text, {
     this.calendarEvents,
     this.document,
     this.updatedMemories,
+    this.updatedTodo,
   });
 }
 
@@ -58,6 +60,13 @@ class LlmService {
     caseSensitive: false,
   );
 
+  // AI 응답 안에서 할 일(Todo) 추가/완료 지시를 찾아내는 태그.
+  // 예: <update_todo>- [ ] 수학 숙제하기\n- [x] 이메일 확인하기</update_todo>
+  static final RegExp _updateTodoTag = RegExp(
+    r'<update_todo>([\s\S]*?)</update_todo>',
+    caseSensitive: false,
+  );
+
   // AI 응답 안에서 과목 학습 기록 추가 지시를 찾아내는 태그.
   static final RegExp _updateSubjectTag = RegExp(
     r'<update_subject>([\s\S]*?)</update_subject>',
@@ -73,6 +82,12 @@ class LlmService {
   // 일정/스케줄 관련 질문일 때만 calendar.json을 시스템 프롬프트에 붙인다.
   static final RegExp _calendarKeywords = RegExp(
     r'일정|스케줄|캘린더|약속|언제|몇\s*시|회의|미팅|날짜|디데이|디-데이|시간표',
+    caseSensitive: false,
+  );
+
+  // 오늘의 할 일(Todo) 관련 키워드 감지
+  static final RegExp _todoKeywords = RegExp(
+    r'할\s*일|투두|todo|체크리스트|할것|과제|숙제',
     caseSensitive: false,
   );
 
@@ -120,10 +135,33 @@ class LlmService {
     return (url != null && url.isNotEmpty) ? url : 'https://integrate.api.nvidia.com/v1/chat/completions';
   }
 
+  static Future<String?> _getVisionApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final vKey = prefs.getString('VISION_API_KEY')?.trim();
+    if (vKey != null && vKey.isNotEmpty) return vKey;
+    return _getApiKey();
+  }
+
+  static Future<String> _getVisionEndpoint() async {
+    final prefs = await SharedPreferences.getInstance();
+    final vUrl = prefs.getString('VISION_ENDPOINT')?.trim();
+    if (vUrl != null && vUrl.isNotEmpty) return vUrl;
+    return _getEndpoint();
+  }
+
   static Future<String> _getModel() async {
     final prefs = await SharedPreferences.getInstance();
     final model = prefs.getString('LLM_MODEL')?.trim();
-    return (model != null && model.isNotEmpty) ? model : '';
+    return (model != null && model.isNotEmpty) ? model : 'meta/llama-3.3-70b-instruct';
+  }
+
+  static Future<String> _getVisionModel() async {
+    final prefs = await SharedPreferences.getInstance();
+    final vModel = prefs.getString('LLM_VISION_MODEL')?.trim();
+    if (vModel != null && vModel.isNotEmpty) return vModel;
+    // 텍스트 전용 모델로 fallback하면 이미지 전송 시 API 에러가 나므로
+    // 항상 비전 지원 모델로 fallback한다.
+    return 'meta/llama-3.2-11b-vision-instruct';
   }
 
   static Future<String> _getBaseSystemPrompt() async {
@@ -181,6 +219,18 @@ class LlmService {
         '- 단순 조회 질문이면 이 태그를 붙이지 않는다.';
   }
 
+  // 옵시디언 볼트에서 관련 노트 검색 및 컨텍스트 주입
+  if (_obsidianKeywords.hasMatch(userMessage) || userMessage.contains('찾아') || userMessage.contains('메모') || userMessage.contains('필기')) {
+    final matchedNotes = await ObsidianService.searchNotes(userMessage);
+    if (matchedNotes.isNotEmpty) {
+      prompt += '\n\n# 사용자 옵시디언 볼트 검색 결과\n';
+      for (var n in matchedNotes) {
+        prompt += '### [${n['title']}]\n${n['content']}\n\n';
+      }
+      prompt += '위 사용자의 개인 노트 내용을 기반으로 질문에 정확하게 답변하세요.\n';
+    }
+  }
+
   if (_obsidianKeywords.hasMatch(userMessage)) {
     prompt += '\n\n# 옵시디언 노트 작성\n'
         '사용자가 특정 텍스트나 정보에 대해 "이거 메모해줘", "노트로 만들어줘", "옵시디언에 저장해줘"라고 요청한 경우, '
@@ -188,6 +238,18 @@ class LlmService {
         '<create_obsidian filename="적절한제목.md">노트 본문(마크다운)</create_obsidian>\n'
         '- 제목은 내용을 잘 나타내는 이름으로 해라.\n'
         '- 자연스러운 확인 문장("옵시디언 노트로 저장할게")은 태그 밖에 써라.';
+  }
+
+  if (_todoKeywords.hasMatch(userMessage)) {
+    final todoContent = await LocalStorageService.readTodo();
+    prompt += '\n\n# 사용자 오늘의 할 일 (todo.md)\n$todoContent'
+        '\n\n# 할 일(Todo)을 추가/완료/수정해야 할 때\n'
+        '사용자가 오늘 할 일을 추가하거나 완료했다고 언급한 경우, 답변 맨 끝에 아래 태그를 붙여라. 이 태그는 사용자에게 보이지 않으니 자연스러운 확인 문장은 태그 밖에 작성해라.\n'
+        '<update_todo>\n'
+        '- [ ] 새로 추가할 할 일\n'
+        '- [x] 완료한 할 일\n'
+        '</update_todo>\n'
+        '- 단순 조회 질문이면 태그를 붙이지 않는다.';
   }
 
   if (_subjectKeywords.hasMatch(userMessage)) {
@@ -287,13 +349,23 @@ class LlmService {
         onSearchStatus?.call('searching', engine);
       },
     );
-    final apiKey = await _getApiKey();
-    final endpoint = await _getEndpoint();
-    final modelName = await _getModel();
-
     final prefs = await SharedPreferences.getInstance();
     final bool isVisionEnabled = prefs.getBool('VISION_ENABLED') ?? true;
     final bool canSendImage = isVisionEnabled && base64Image != null && base64Image.isNotEmpty;
+    final apiKey = canSendImage ? await _getVisionApiKey() : await _getApiKey();
+    final endpoint = canSendImage ? await _getVisionEndpoint() : await _getEndpoint();
+    final mainModelName = await _getModel();
+    final visionModelName = await _getVisionModel();
+    final modelName = canSendImage ? visionModelName : mainModelName;
+
+    String finalSystemPrompt = systemPrompt;
+    if (canSendImage) {
+      finalSystemPrompt += '\n\n# [비전(Vision) AI 분석 모드 활성화]\n'
+          '사용자가 사진, 캡처 화면 또는 문제 이미지를 전송했습니다.\n'
+          '- 이미지 속 텍스트, 다이어그램, 수식, 그래프, 에러 화면, 사물 등을 시각적으로 정확히 분석하여 사용자의 질문에 답변하세요.\n'
+          '- 수식이나 기호는 LaTeX 포맷(\\(수식\\) 혹은 \\[수식\\])으로 작성하세요.\n'
+          '- 문제 풀이나 코드가 포함되어 있다면 핵심 개념과 정답을 단계별로 친절하게 설명하세요.\n';
+    }
 
     if (apiKey == null || apiKey.isEmpty) {
       return const LlmResponse('Error: API key not set.');
@@ -309,7 +381,7 @@ class LlmService {
         body: jsonEncode({
           'model': modelName,
           'messages': [
-            {'role': 'system', 'content': systemPrompt},
+            {'role': 'system', 'content': finalSystemPrompt},
             ...sanitizedHistory,
             if (canSendImage)
               {
@@ -327,7 +399,9 @@ class LlmService {
           ],
           'temperature': 0.7,
         }),
-      );
+      ).timeout(const Duration(seconds: 120), onTimeout: () {
+        throw Exception('API 요청 시간이 초과되었습니다 (120초). 모델이 응답하는 데 너무 오래 걸립니다.');
+      });
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
@@ -409,6 +483,21 @@ class LlmService {
           content = content.replaceFirst(memMatch.group(0)!, '').trim();
         }
 
+        // 할 일(Todo) 업데이트 태그 처리
+        List<Map<String, dynamic>>? updatedTodo;
+        final todoMatch = _updateTodoTag.firstMatch(content);
+        if (todoMatch != null) {
+          final rawTodo = todoMatch.group(1)?.trim() ?? '';
+          if (rawTodo.isNotEmpty) {
+            try {
+              updatedTodo = await LocalStorageService.mergeTodoFromTags(rawTodo);
+            } catch (e) {
+              debugPrint('Failed to merge <update_todo> payload: $e');
+            }
+          }
+          content = content.replaceFirst(todoMatch.group(0)!, '').trim();
+        }
+
         // 과목 업데이트 태그 처리
         final subjectMatches = _updateSubjectTag.allMatches(content).toList();
         for (var match in subjectMatches) {
@@ -454,6 +543,8 @@ class LlmService {
             content = '${document.title} 만들었어. 아래 버튼으로 확인할 수 있어.';
           } else if (mergedEvents != null) {
             content = '일정을 반영했어.';
+          } else if (updatedTodo != null) {
+            content = '할 일을 반영했어.';
           } else if (updatedMemories != null) {
             content = '기억해뒀어.';
           } else if (obsidianSaved) {
@@ -470,6 +561,7 @@ class LlmService {
           calendarEvents: mergedEvents,
           document: document,
           updatedMemories: updatedMemories,
+          updatedTodo: updatedTodo,
         );
       } else {
         return LlmResponse('Error: API returned status ${response.statusCode}\n[Debug] Endpoint: $endpoint\n[Debug] Model: $modelName');
@@ -479,14 +571,14 @@ class LlmService {
     }
   }
 
-  static Future<String?> generateProactiveResponse(String contextPrompt) async {
+  static Future<String?> generateProactiveResponse(String contextPrompt, {String? systemPromptOverride}) async {
     final apiKey = await _getApiKey();
     final endpoint = await _getEndpoint();
     final modelName = await _getModel();
 
     if (apiKey == null || apiKey.isEmpty) return null;
 
-    final systemPrompt = "너는 보스(사용자)를 돕는 E.V. (능동형 AI 비서)야.\n"
+    final systemPrompt = systemPromptOverride ?? "너는 보스(사용자)를 돕는 E.V. (능동형 AI 비서)야.\n"
         "아래 제공되는 현재 상황(시간, 배터리 상태, 다가오는 일정 등)을 보고, 보스에게 꼭 해줄 말이 있으면 1~2문장의 짧고 친근한 알림 메시지를 작성해.\n"
         "만약 굳이 알릴 필요가 없거나 이미 지나간/너무 먼 일정이라면 'SILENT'라고만 대답해.";
 
@@ -523,9 +615,9 @@ class LlmService {
   }
 
   static Future<String?> extractTextFromImage(String base64Image) async {
-    final apiKey = await _getApiKey();
-    final endpoint = await _getEndpoint();
-    final modelName = await _getModel();
+    final apiKey = await _getVisionApiKey();
+    final endpoint = await _getVisionEndpoint();
+    final modelName = await _getVisionModel();
 
     if (apiKey == null || apiKey.isEmpty) return null;
 
@@ -566,6 +658,38 @@ class LlmService {
   }
 
 
+  /// LLM 응답에서 <think> 태그나 설명글을 제거하고 순수 JSON Map을 안전하게 추출
+  static Map<String, dynamic>? _extractJsonMap(String rawContent) {
+    try {
+      String clean = rawContent.trim();
+
+      // 1. <think>...</think> 제거 (DeepSeek R1 / Reasoning 모델 대응)
+      clean = clean.replaceAll(RegExp(r'<think>[\s\S]*?<\/think>', caseSensitive: false), '').trim();
+
+      // 2. ```json ... ``` 또는 ``` ... ``` 마크다운 코드 블록 추출
+      final codeBlockMatch = RegExp(r'```(?:json)?\s*([\s\S]*?)\s*```').firstMatch(clean);
+      if (codeBlockMatch != null) {
+        clean = codeBlockMatch.group(1)?.trim() ?? clean;
+      }
+
+      // 3. 첫 번째 '{' 와 마지막 '}' 사이 추출
+      final startIdx = clean.indexOf('{');
+      final endIdx = clean.lastIndexOf('}');
+      if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+        clean = clean.substring(startIdx, endIdx + 1);
+      }
+
+      // 4. JSON 파싱
+      final decoded = jsonDecode(clean);
+      if (decoded is Map) {
+        return decoded.cast<String, dynamic>();
+      }
+    } catch (e) {
+      debugPrint('LlmService._extractJsonMap error: $e\nRaw was: $rawContent');
+    }
+    return null;
+  }
+
   static Future<Map<String, dynamic>?> processOcrForWrongNote(String text) async {
     final apiKey = await _getApiKey();
     final endpoint = await _getEndpoint();
@@ -597,28 +721,14 @@ class LlmService {
           ],
           'temperature': 0.3,
         }),
-      );
+      ).timeout(const Duration(seconds: 90));
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
-        String content = jsonResponse['choices'][0]['message']['content'] as String;
-        content = content.trim();
-
-        if (content.startsWith('```')) {
-          final lines = content.split('\n');
-          if (lines.first.startsWith('```json') || lines.first.startsWith('```')) {
-            lines.removeAt(0);
-          }
-          if (lines.last.startsWith('```')) {
-            lines.removeLast();
-          }
-          content = lines.join('\n').trim();
-        }
-
-        final decoded = jsonDecode(content);
-        if (decoded is Map) {
-          return decoded.cast<String, dynamic>();
-        }
+        final content = jsonResponse['choices'][0]['message']['content'] as String;
+        return _extractJsonMap(content);
+      } else {
+        debugPrint('processOcrForWrongNote API error: ${response.statusCode} ${response.body}');
       }
     } catch (e) {
       debugPrint('processOcrForWrongNote error: $e');
@@ -626,10 +736,17 @@ class LlmService {
     return null;
   }
 
-  static Future<Map<String, dynamic>?> processOcrForWrongNoteImage(String base64Image) async {
-    final apiKey = await _getApiKey();
-    final endpoint = await _getEndpoint();
-    final modelName = await _getModel();
+  static Future<Map<String, dynamic>?> processOcrForWrongNoteImage(String rawBase64Image) async {
+    // image/jpg -> image/jpeg 및 데이터 URI 규격 표준화
+    String base64Image = rawBase64Image.trim();
+    if (base64Image.startsWith('data:image/jpg;')) {
+      base64Image = base64Image.replaceFirst('data:image/jpg;', 'data:image/jpeg;');
+    } else if (!base64Image.startsWith('data:image/')) {
+      base64Image = 'data:image/jpeg;base64,$base64Image';
+    }
+    final apiKey = await _getVisionApiKey();
+    final endpoint = await _getVisionEndpoint();
+    final modelName = await _getVisionModel();
 
     if (apiKey == null || apiKey.isEmpty) return null;
 
@@ -670,25 +787,8 @@ class LlmService {
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
-        String content = jsonResponse['choices'][0]['message']['content'] as String;
-        content = content.trim();
-
-        // JSON 추출 (마크다운 ```json ... ``` 잘라내기)
-        if (content.startsWith('```')) {
-          final lines = content.split('\n');
-          if (lines.first.startsWith('```json') || lines.first.startsWith('```')) {
-            lines.removeAt(0);
-          }
-          if (lines.last.startsWith('```')) {
-            lines.removeLast();
-          }
-          content = lines.join('\n').trim();
-        }
-
-        final decoded = jsonDecode(content);
-        if (decoded is Map) {
-          return decoded.cast<String, dynamic>();
-        }
+        final content = jsonResponse['choices'][0]['message']['content'] as String;
+        return _extractJsonMap(content);
       }
     } catch (e) {
       debugPrint('processOcrForWrongNoteImage error: $e');

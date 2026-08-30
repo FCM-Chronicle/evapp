@@ -430,7 +430,31 @@ class LocalStorageService {
           }
           final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
           final archiveFile = File('${archivesDir.path}/conversation_$timestamp.json');
-          await archiveFile.writeAsString(content);
+
+          // 첫 번째 사용자 메시지를 제목으로 추출
+          String title = '';
+          try {
+            final decoded = jsonDecode(content);
+            if (decoded is List) {
+              for (var msg in decoded) {
+                if (msg is Map && msg['role'] == 'user') {
+                  title = (msg['content'] as String? ?? '').trim();
+                  // 제목이 너무 길면 잘라내기
+                  if (title.length > 50) {
+                    title = '${title.substring(0, 47)}...';
+                  }
+                  break;
+                }
+              }
+            }
+          } catch (_) {}
+
+          // title 포함 형식으로 저장
+          final archiveData = jsonEncode({
+            'title': title.isEmpty ? '제목 없음' : title,
+            'messages': jsonDecode(content),
+          });
+          await archiveFile.writeAsString(archiveData);
         }
       }
       return writeConversationHistory([]);
@@ -452,10 +476,34 @@ class LocalStorageService {
       for (final f in files) {
         if (f is File && f.path.endsWith('.json')) {
           final stat = await f.stat();
+          String title = '';
+
+          // 아카이브 파일에서 title 읽기
+          try {
+            final content = await f.readAsString();
+            final decoded = jsonDecode(content);
+            if (decoded is Map && decoded.containsKey('title')) {
+              // 새 형식: {title: "...", messages: [...]}
+              title = decoded['title'] as String? ?? '';
+            } else if (decoded is List && decoded.isNotEmpty) {
+              // 기존 형식: [{role, content}, ...] — 첫 user 메시지에서 추출
+              for (var msg in decoded) {
+                if (msg is Map && msg['role'] == 'user') {
+                  title = (msg['content'] as String? ?? '').trim();
+                  if (title.length > 50) {
+                    title = '${title.substring(0, 47)}...';
+                  }
+                  break;
+                }
+              }
+            }
+          } catch (_) {}
+
           list.add({
             'path': f.path,
             'name': f.path.split(Platform.pathSeparator).last,
             'date': stat.modified.toIso8601String(),
+            'title': title.isEmpty ? '제목 없음' : title,
           });
         }
       }
@@ -467,6 +515,38 @@ class LocalStorageService {
     }
   }
 
+  /// Renames an archived conversation's title.
+  static Future<bool> renameArchive(String path, String newTitle) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return false;
+
+      final content = await file.readAsString();
+      final decoded = jsonDecode(content);
+
+      Map<String, dynamic> archiveData;
+      if (decoded is Map) {
+        // 새 형식
+        archiveData = Map<String, dynamic>.from(decoded);
+        archiveData['title'] = newTitle;
+      } else if (decoded is List) {
+        // 기존 형식 → 새 형식으로 마이그레이션
+        archiveData = {
+          'title': newTitle,
+          'messages': decoded,
+        };
+      } else {
+        return false;
+      }
+
+      await file.writeAsString(jsonEncode(archiveData));
+      return true;
+    } catch (e) {
+      debugPrint('LocalStorageService.renameArchive error: $e');
+      return false;
+    }
+  }
+
   /// Loads a specific archive and sets it as the current conversation.
   static Future<bool> loadArchive(String path) async {
     try {
@@ -474,16 +554,26 @@ class LocalStorageService {
       if (await archiveFile.exists()) {
         final content = await archiveFile.readAsString();
         final decoded = jsonDecode(content);
-        if (decoded is List) {
-          final history = decoded
-              .map((e) => Map<String, String>.from(
-                    (e as Map).map(
-                      (k, v) => MapEntry(k.toString(), v.toString()),
-                    ),
-                  ))
-              .toList();
-          return writeConversationHistory(history);
+
+        List messages;
+        if (decoded is Map && decoded.containsKey('messages')) {
+          // 새 형식: {title: "...", messages: [...]}
+          messages = decoded['messages'] as List;
+        } else if (decoded is List) {
+          // 기존 형식: [{role, content}, ...]
+          messages = decoded;
+        } else {
+          return false;
         }
+
+        final history = messages
+            .map((e) => Map<String, String>.from(
+                  (e as Map).map(
+                    (k, v) => MapEntry(k.toString(), v.toString()),
+                  ),
+                ))
+            .toList();
+        return writeConversationHistory(history);
       }
       return false;
     } catch (e) {
@@ -581,6 +671,137 @@ class LocalStorageService {
     } catch (e) {
       debugPrint('LocalStorageService.writeTodo error: $e');
       return false;
+    }
+  }
+
+  /// Parses todo.md into a structured List<Map<String, dynamic>>
+  /// [{ id, text, completed }]
+  static Future<List<Map<String, dynamic>>> readTodoItems() async {
+    try {
+      final content = await readTodo();
+      final lines = content.split('\n');
+      final List<Map<String, dynamic>> items = [];
+      int index = 0;
+      for (final line in lines) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('- [ ]')) {
+          final text = trimmed.substring(5).trim();
+          if (text.isNotEmpty) {
+            items.add({
+              'id': 'todo_$index',
+              'text': text,
+              'completed': false,
+            });
+            index++;
+          }
+        } else if (trimmed.startsWith('- [x]') || trimmed.startsWith('- [X]')) {
+          final text = trimmed.substring(5).trim();
+          if (text.isNotEmpty) {
+            items.add({
+              'id': 'todo_$index',
+              'text': text,
+              'completed': true,
+            });
+            index++;
+          }
+        }
+      }
+      return items;
+    } catch (e) {
+      debugPrint('LocalStorageService.readTodoItems error: $e');
+      return [];
+    }
+  }
+
+  /// Serializes structured todo items back to markdown and saves to todo.md
+  static Future<bool> writeTodoItems(List<dynamic> items) async {
+    try {
+      final buffer = StringBuffer();
+      buffer.writeln('# 오늘의 할 일 (Todo)');
+      buffer.writeln();
+      buffer.writeln('직접 수정해서 오늘 할 일을 기록하세요. (매일 오전 2시에 에이전트가 확인하여 초기화 또는 정리해 드립니다)');
+      buffer.writeln();
+      for (final item in items) {
+        final text = (item['text'] ?? '').toString().trim();
+        final bool completed = item['completed'] == true;
+        if (text.isNotEmpty) {
+          buffer.writeln(completed ? '- [x] $text' : '- [ ] $text');
+        }
+      }
+      return await writeTodo(buffer.toString());
+    } catch (e) {
+      debugPrint('LocalStorageService.writeTodoItems error: $e');
+      return false;
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> appendTodoItem(String text) async {
+    final items = await readTodoItems();
+    if (text.trim().isNotEmpty) {
+      items.add({
+        'id': 'todo_${DateTime.now().millisecondsSinceEpoch}',
+        'text': text.trim(),
+        'completed': false,
+      });
+      await writeTodoItems(items);
+    }
+    return items;
+  }
+
+  static Future<List<Map<String, dynamic>>> toggleTodoItem(int index) async {
+    final items = await readTodoItems();
+    if (index >= 0 && index < items.length) {
+      items[index]['completed'] = !(items[index]['completed'] == true);
+      await writeTodoItems(items);
+    }
+    return items;
+  }
+
+  static Future<List<Map<String, dynamic>>> deleteTodoItem(int index) async {
+    final items = await readTodoItems();
+    if (index >= 0 && index < items.length) {
+      items.removeAt(index);
+      await writeTodoItems(items);
+    }
+    return items;
+  }
+
+  static Future<List<Map<String, dynamic>>> mergeTodoFromTags(String rawContent) async {
+    try {
+      final items = await readTodoItems();
+      final lines = rawContent.split('\n');
+      for (var line in lines) {
+        line = line.trim();
+        if (line.isEmpty) continue;
+        bool completed = false;
+        String text = line;
+        if (line.startsWith('- [x]') || line.startsWith('- [X]')) {
+          completed = true;
+          text = line.substring(5).trim();
+        } else if (line.startsWith('- [ ]')) {
+          completed = false;
+          text = line.substring(5).trim();
+        } else if (line.startsWith('-')) {
+          text = line.substring(1).trim();
+        }
+        if (text.isNotEmpty) {
+          final existingIdx = items.indexWhere((it) => it['text'] == text);
+          if (existingIdx != -1) {
+            items[existingIdx]['completed'] = completed;
+          } else {
+            items.add({
+              'id': 'todo_${DateTime.now().millisecondsSinceEpoch}_${items.length}',
+              'text': text,
+              'completed': completed,
+            });
+          }
+        }
+      }
+      await writeTodoItems(items);
+      return items;
+    } catch (e) {
+      debugPrint('LocalStorageService.mergeTodoFromTags error: $e');
+      return await readTodoItems();
     }
   }
 

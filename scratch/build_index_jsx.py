@@ -1,4 +1,12 @@
-import "./index.css";
+# -*- coding: utf-8 -*-
+"""
+Script to generate the updated Cyberpunk Spider Web HUD index.jsx
+"""
+import os
+
+OUTPUT_PATH = r"c:\Users\jinuj\vsc\E.V.app\evapp\evweb\src\index.jsx"
+
+code = r'''import "./index.css";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import ReactDOM from "react-dom/client";
 import { motion, AnimatePresence } from "framer-motion";
@@ -1968,11 +1976,9 @@ function MainScreen({
 function ApiKeyScreen({ onBack }) {
     const { scale } = useResponsiveLayout();
     const [key, setKey] = useState(() => localStorage.getItem("LLM_KEY") || "");
-    const [visionKey, setVisionKey] = useState(() => localStorage.getItem("VISION_KEY") || "");
     const [searchKey, setSearchKey] = useState(() => localStorage.getItem("EXA_KEY") || "");
     const [kmaKey, setKmaKey] = useState(() => localStorage.getItem("KMA_API_KEY") || "");
     const [endpoint, setEndpoint] = useState(() => localStorage.getItem("LLM_ENDPOINT") || "");
-    const [visionEndpoint, setVisionEndpoint] = useState(() => localStorage.getItem("VISION_ENDPOINT") || "");
     const [model, setModel] = useState(() => localStorage.getItem("LLM_MODEL") || "");
     const [visionModel, setVisionModel] = useState(() => localStorage.getItem("LLM_VISION_MODEL") || "meta/llama-3.2-11b-vision-instruct");
     const [visionEnabled, setVisionEnabled] = useState(() => localStorage.getItem("VISION_ENABLED") !== "false");
@@ -1986,14 +1992,12 @@ function ApiKeyScreen({ onBack }) {
         const handleSettingsSync = (e) => {
             const payload = e.detail;
             if (payload?.type === "settings_sync") {
-                if (payload.llmKey !== undefined) setKey(payload.llmKey);
-                if (payload.visionKey !== undefined) setVisionKey(payload.visionKey);
-                if (payload.exaKey !== undefined) setSearchKey(payload.exaKey);
-                if (payload.kmaKey !== undefined) setKmaKey(payload.kmaKey);
-                if (payload.llmEndpoint !== undefined) setEndpoint(payload.llmEndpoint);
-                if (payload.visionEndpoint !== undefined) setVisionEndpoint(payload.visionEndpoint);
-                if (payload.llmModel !== undefined) setModel(payload.llmModel);
-                if (payload.visionModel !== undefined) setVisionModel(payload.visionModel);
+                if (payload.llmKey) setKey(payload.llmKey);
+                if (payload.exaKey) setSearchKey(payload.exaKey);
+                if (payload.kmaKey) setKmaKey(payload.kmaKey);
+                if (payload.llmEndpoint) setEndpoint(payload.llmEndpoint);
+                if (payload.llmModel) setModel(payload.llmModel);
+                if (payload.visionModel) setVisionModel(payload.visionModel);
             }
         };
         window.addEventListener("ev-native-event", handleSettingsSync);
@@ -2002,11 +2006,9 @@ function ApiKeyScreen({ onBack }) {
 
     const handleSave = () => {
         localStorage.setItem("LLM_KEY", key);
-        localStorage.setItem("VISION_KEY", visionKey);
         localStorage.setItem("EXA_KEY", searchKey);
         localStorage.setItem("KMA_API_KEY", kmaKey);
         localStorage.setItem("LLM_ENDPOINT", endpoint);
-        localStorage.setItem("VISION_ENDPOINT", visionEndpoint);
         localStorage.setItem("LLM_MODEL", model);
         localStorage.setItem("LLM_VISION_MODEL", visionModel);
         localStorage.setItem("VISION_ENABLED", String(visionEnabled));
@@ -2016,7 +2018,7 @@ function ApiKeyScreen({ onBack }) {
         localStorage.setItem("FIRECRAWL_KEY", firecrawlKey);
         localStorage.setItem("FOOTBALL_DATA_KEY", footballDataKey);
         sendToFlutter("save_api_key", {
-            key, visionKey, searchKey, kmaKey, endpoint, visionEndpoint, model, visionModel,
+            key, searchKey, kmaKey, endpoint, model, visionModel,
             naverClientId, naverClientSecret, tavilyKey, firecrawlKey,
             visionEnabled, footballDataKey,
         });
@@ -2034,41 +2036,25 @@ function ApiKeyScreen({ onBack }) {
         <div className="flex flex-col h-full overflow-y-auto">
             <StatusBar showBack onBack={onBack} title="API & MODEL MATRIX" />
             <div className="flex-1 px-4 py-5 flex flex-col">
-                <Section title="MAIN TEXT MODEL (대화 & 분석)" tone={C.cyanLight}>
+                <Section title="AI MODEL CONFIGURATION" tone={C.cyanLight}>
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>LLM API KEY</span>
                     <input
-                        value={key} onChange={(e) => setKey(e.target.value)} placeholder="API Key (예: nvapi-...)"
+                        value={key} onChange={(e) => setKey(e.target.value)} placeholder="API Key..."
                         type="password"
                         className="w-full bg-transparent outline-none hud-cut-corner-sm"
                         style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
                     />
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>ENDPOINT URL</span>
                     <input
-                        value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://integrate.api.nvidia.com/v1/chat/completions"
+                        value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://..."
                         className="w-full bg-transparent outline-none hud-cut-corner-sm"
                         style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
                     />
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>MAIN TEXT MODEL</span>
                     <input
-                        value={model} onChange={(e) => setModel(e.target.value)} placeholder="meta/llama-3.3-70b-instruct"
+                        value={model} onChange={(e) => setModel(e.target.value)} placeholder="llama-3.3-70b-instruct"
                         className="w-full bg-transparent outline-none hud-cut-corner-sm"
                         style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
-                    />
-                </Section>
-
-                <Section title="VISION AI MODEL (이미지 분석 & OCR)" tone={C.lime}>
-                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>VISION API KEY (미입력 시 기본 LLM KEY 사용)</span>
-                    <input
-                        value={visionKey} onChange={(e) => setVisionKey(e.target.value)} placeholder="Vision 전용 API Key (선택 사항)"
-                        type="password"
-                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
-                        style={{ ...mono, color: C.lime, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
-                    />
-                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>VISION ENDPOINT URL (미입력 시 기본 ENDPOINT 사용)</span>
-                    <input
-                        value={visionEndpoint} onChange={(e) => setVisionEndpoint(e.target.value)} placeholder="Vision 전용 URL (선택 사항: https://...)"
-                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
-                        style={{ ...mono, color: C.lime, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
                     />
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>VISION MODEL</span>
                     <input
@@ -3587,22 +3573,18 @@ export default function EVApp() {
                     triggerToast({ eyebrow: "WI-FI", message: `${payload.name} 연결됨`, icon: Wifi, color: C.cyan });
                     break;
                 case "calendar_sync":
-                case "calendar_sync_init":
                     if (payload.calendarMd) setCalendarMd(payload.calendarMd);
                     else if (payload.events) setCalendarMd(eventsToCalendarMd(payload.events));
                     break;
                 case "todo_sync":
-                case "todo_sync_init":
                     if (payload.items) setTodoItems(payload.items);
                     if (payload.content !== undefined) setTodoContent(payload.content);
                     break;
                 case "memories_sync":
-                case "memories_sync_init":
                     if (payload.content !== undefined) setMemoriesContent(payload.content);
                     break;
                 case "archives_sync":
-                case "archives_list":
-                    setArchivesList(payload.archives || []);
+                    if (payload.archives) setArchivesList(payload.archives);
                     break;
                 case "wrong_notes_sync":
                     if (payload.notes) setWrongNotes(payload.notes);
@@ -3624,27 +3606,6 @@ export default function EVApp() {
                         solution: payload.solution || "",
                     });
                     break;
-                case "ocr_result":
-                    if (payload.success === false || payload.error) {
-                        triggerToast({ eyebrow: "OCR SCAN", message: payload.error || "텍스트 인식 실패", icon: FileText, color: C.coral });
-                    } else if (payload.text) {
-                        setTextInjectEvent({ text: payload.text, source: "ocr" });
-                        triggerToast({ eyebrow: "OCR SCAN", message: "텍스트 인식 완료", icon: FileText, color: C.lime });
-                        triggerAlert("done");
-                    }
-                    break;
-                case "wrong_ocr_result":
-                    setWrongOcrProcessing(false);
-                    if (payload.success === false || payload.error) {
-                        triggerAlert("error");
-                        if (payload.error && payload.error !== "취소되었습니다.") {
-                            alert(`오답 분석 실패: ${payload.error}`);
-                        }
-                    } else {
-                        if (payload.notes) setWrongNotes(payload.notes);
-                        triggerAlert("done");
-                    }
-                    break;
                 case "search_status":
                     setSearchEngineStatus(payload.engine || null);
                     break;
@@ -3656,7 +3617,6 @@ export default function EVApp() {
                     setLlmResultEvent({ id: payload.id, text: payload.text });
                     break;
                 case "conversation_history":
-                case "conversation_sync_init":
                     setConversationHistoryEvent({ history: payload.history || [] });
                     break;
                 case "file_picked":
@@ -3879,3 +3839,10 @@ export default function EVApp() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<EVApp />);
+'''
+
+with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+    f.write(code)
+
+print("SUCCESS: index.jsx generated successfully!")
+

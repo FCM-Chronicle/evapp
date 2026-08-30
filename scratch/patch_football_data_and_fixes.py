@@ -1,4 +1,104 @@
-import 'dart:convert';
+import os
+
+lib_dir = r"c:\Users\jinuj\vsc\E.V.app\evapp\lib"
+web_src_dir = r"c:\Users\jinuj\vsc\E.V.app\evapp\evweb\src"
+
+# 1. Update background_service.dart with SharedPreferences persistent dates
+bg_path = os.path.join(lib_dir, "background_service.dart")
+with open(bg_path, 'r', encoding='utf-8') as f:
+    bg_content = f.read()
+
+# Replace in-memory check with SharedPreferences persistent check
+old_bg_loop = """  final Map<String, DateTime> _lastScheduleTriggers = {};
+  DateTime? _lastDDayPush;
+  DateTime? _lastNightRoutine;
+  DateTime? _lastTodoReset;
+  DateTime? _lastSportsBriefing;
+
+  Timer.periodic(const Duration(minutes: 1), (timer) async {
+    final now = DateTime.now();
+
+    // 1. Check schedule.json"""
+
+new_bg_loop = """  final Map<String, DateTime> _lastScheduleTriggers = {};
+
+  Timer.periodic(const Duration(minutes: 1), (timer) async {
+    final now = DateTime.now();
+    final todayStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. Check schedule.json"""
+
+if old_bg_loop in bg_content:
+    bg_content = bg_content.replace(old_bg_loop, new_bg_loop)
+
+old_dday = """    // 2. D-Day Smart Push (09:00)
+    if (now.hour == 9 && now.minute == 0) {
+      if (_lastDDayPush == null || _lastDDayPush!.day != now.day) {
+        _lastDDayPush = now;"""
+
+new_dday = """    // 2. D-Day Smart Push (09:00)
+    if (now.hour == 9 && now.minute == 0) {
+      if (prefs.getString('LAST_DDAY_PUSH_DATE') != todayStr) {
+        await prefs.setString('LAST_DDAY_PUSH_DATE', todayStr);"""
+
+if old_dday in bg_content:
+    bg_content = bg_content.replace(old_dday, new_dday)
+
+old_todo_reset = """    // 2.5 Todo Daily Reset (02:00)
+    if (now.hour == 2 && now.minute == 0) {
+      if (_lastTodoReset == null || _lastTodoReset!.day != now.day) {
+        _lastTodoReset = now;
+        await LocalStorageService.resetTodoDaily();"""
+
+new_todo_reset = """    // 2.5 Todo Daily Reset (02:00)
+    if (now.hour == 2 && now.minute == 0) {
+      if (prefs.getString('LAST_TODO_RESET_DATE') != todayStr) {
+        await prefs.setString('LAST_TODO_RESET_DATE', todayStr);
+        await LocalStorageService.resetTodoDaily();"""
+
+if old_todo_reset in bg_content:
+    bg_content = bg_content.replace(old_todo_reset, new_todo_reset)
+
+old_sports_trigger = """    // 4. Sports Morning Briefing (07:00)
+    if (now.hour == 7 && now.minute == 0) {
+      if (_lastSportsBriefing == null || _lastSportsBriefing!.day != now.day) {
+        _lastSportsBriefing = now;
+        await SportsService.generateMorningBriefing();
+      }
+    }"""
+
+new_sports_trigger = """    // 4. Sports Morning Briefing (07:00)
+    if (now.hour == 7 && now.minute == 0) {
+      if (prefs.getString('LAST_SPORTS_DATE') != todayStr) {
+        await prefs.setString('LAST_SPORTS_DATE', todayStr);
+        await SportsService.generateMorningBriefing();
+      }
+    }"""
+
+if old_sports_trigger in bg_content:
+    bg_content = bg_content.replace(old_sports_trigger, new_sports_trigger)
+
+old_night_trigger = """    // 3. Night Routine Check-in (00:30)
+    if (now.hour == 0 && now.minute == 30) {
+      if (_lastNightRoutine == null || _lastNightRoutine!.day != now.day) {
+        _lastNightRoutine = now;"""
+
+new_night_trigger = """    // 3. Night Routine Check-in (00:30)
+    if (now.hour == 0 && now.minute == 30) {
+      if (prefs.getString('LAST_NIGHT_ROUTINE_DATE') != todayStr) {
+        await prefs.setString('LAST_NIGHT_ROUTINE_DATE', todayStr);"""
+
+if old_night_trigger in bg_content:
+    bg_content = bg_content.replace(old_night_trigger, new_night_trigger)
+
+with open(bg_path, 'w', encoding='utf-8') as f:
+    f.write(bg_content)
+
+
+# 2. Update sports_service.dart with Football-Data.org and KBO rest-day notifications
+sports_path = os.path.join(lib_dir, "sports_service.dart")
+sports_service_code = """import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -152,7 +252,7 @@ class SportsService {
                 for (var r in etcRecords) {
                   final how = r['how'] ?? '';
                   final result = r['result'] ?? '';
-                  etcRecordsText += "  - $how: $result\n";
+                  etcRecordsText += "  - $how: $result\\n";
                 }
               }
             }
@@ -161,12 +261,12 @@ class SportsService {
           }
         }
 
-        combinedGameSummaries += "\n--- [$homeTeam vs $awayTeam 경기 데이터] ---\n"
-            "• 스코어: $awayTeam $awayScore vs $homeScore $homeTeam ($stadium 구장)\n"
-            "• 승리팀: $winner\n"
-            "• 선발 투수: $awayTeam($awayStarter) vs $homeTeam($homeStarter)\n"
-            "• 투수 결정: 승리($winPitcher) / 패전($losePitcher) / 세이브($savePitcher)\n"
-            "• 주요 타격/홈런 기록:\n$etcRecordsText\n";
+        combinedGameSummaries += "\\n--- [$homeTeam vs $awayTeam 경기 데이터] ---\\n"
+            "• 스코어: $awayTeam $awayScore vs $homeScore $homeTeam ($stadium 구장)\\n"
+            "• 승리팀: $winner\\n"
+            "• 선발 투수: $awayTeam($awayStarter) vs $homeTeam($homeStarter)\\n"
+            "• 투수 결정: 승리($winPitcher) / 패전($losePitcher) / 세이브($savePitcher)\\n"
+            "• 주요 타격/홈런 기록:\\n$etcRecordsText\\n";
       }
 
       if (combinedGameSummaries.trim().isEmpty) {
@@ -174,12 +274,12 @@ class SportsService {
         return;
       }
 
-      final prompt = "다음은 어제($dateStr) 열린 KBO 프로야구 관심 구단들의 경기 결과 및 공식 기록입니다:\n"
-          "$combinedGameSummaries\n\n"
-          "위 데이터를 바탕으로 사용자에게 보낼 아침 KBO 종합 경기 브리핑을 작성해주세요.\n"
-          "팀이 여러 개라면 팀별로 보기 좋게 구분해서 작성해주세요.\n"
-          "포맷:\n"
-          "⚾ [KBO] $dateStr 모닝 경기 브리핑\n"
+      final prompt = "다음은 어제($dateStr) 열린 KBO 프로야구 관심 구단들의 경기 결과 및 공식 기록입니다:\\n"
+          "$combinedGameSummaries\\n\\n"
+          "위 데이터를 바탕으로 사용자에게 보낼 아침 KBO 종합 경기 브리핑을 작성해주세요.\\n"
+          "팀이 여러 개라면 팀별로 보기 좋게 구분해서 작성해주세요.\\n"
+          "포맷:\\n"
+          "⚾ [KBO] $dateStr 모닝 경기 브리핑\\n"
           "(각 경기별: 경기 스코어 / 투수 기록 / 주요 타격 & 홈런 / 한줄 요약)";
 
       final briefing = await LlmService.generateProactiveResponse(prompt);
@@ -216,7 +316,7 @@ class SportsService {
         }
 
         // Football-Data.org: 최신 경기 조회
-        final url = Uri.parse('https://api.football-data.org/v4/teams/$teamId/matches?status=FINISHED');
+        final url = Uri.parse('https://api.football-data.org/v4/teams/$teamId/matches?status=FINISHED&limit=1');
         final matchRes = await http.get(url, headers: {
           'X-Auth-Token': token,
         }).timeout(const Duration(seconds: 6));
@@ -230,7 +330,7 @@ class SportsService {
         final matches = matchData['matches'] as List?;
         if (matches == null || matches.isEmpty) continue;
 
-        final match = matches.last;
+        final match = matches[0];
         final compName = match['competition']?['name'] ?? '리그 경기';
         final homeTeamName = match['homeTeam']?['name'] ?? '';
         final awayTeamName = match['awayTeam']?['name'] ?? '';
@@ -265,7 +365,7 @@ class SportsService {
                   final title = item['title'] ?? '전술 칼럼';
                   String md = item['markdown'] ?? item['description'] ?? '';
                   if (md.length > 900) md = md.substring(0, 900) + '...';
-                  tacticalArticleContext += "  - [$title] $md\n";
+                  tacticalArticleContext += "  - [$title] $md\\n";
                 }
               }
             }
@@ -274,10 +374,10 @@ class SportsService {
           }
         }
 
-        combinedFootballContext += "\n--- [$rawTeamName 경기 결과 ($compName)] ---\n"
-            "• 매치업: $homeTeamName $homeScore : $awayScore $awayTeamName (전반 $halfHome : $halfAway)\n"
-            "• 경기 일시: $dateStr\n"
-            "• 해외 전술 분석 기사 요약:\n$tacticalArticleContext\n";
+        combinedFootballContext += "\\n--- [$rawTeamName 경기 결과 ($compName)] ---\\n"
+            "• 매치업: $homeTeamName $homeScore : $awayScore $awayTeamName (전반 $halfHome : $halfAway)\\n"
+            "• 경기 일시: $dateStr\\n"
+            "• 해외 전술 분석 기사 요약:\\n$tacticalArticleContext\\n";
       }
 
       if (combinedFootballContext.trim().isEmpty) {
@@ -285,9 +385,9 @@ class SportsService {
         return;
       }
 
-      final prompt = "다음은 관심 해외 축구 구단들의 최근 경기 결과 및 해외 매체 전술 분석 기사 내용입니다:\n"
-          "$combinedFootballContext\n\n"
-          "위 데이터를 융합하여 사용자에게 보낼 아침 축구 모닝 브리핑을 작성해주세요.\n"
+      final prompt = "다음은 관심 해외 축구 구단들의 최근 경기 결과 및 해외 매체 전술 분석 기사 내용입니다:\\n"
+          "$combinedFootballContext\\n\\n"
+          "위 데이터를 융합하여 사용자에게 보낼 아침 축구 모닝 브리핑을 작성해주세요.\\n"
           "팀이 여러 개라면 팀별로 깔끔하게 구분하고, 경기 스코어와 전술 핵심 포인트 3가지를 마크다운으로 정리해주세요.";
 
       final briefing = await LlmService.generateProactiveResponse(prompt);
@@ -300,3 +400,41 @@ class SportsService {
     }
   }
 }
+"""
+
+with open(sports_path, 'w', encoding='utf-8') as f:
+    f.write(sports_service_code)
+
+
+# 3. Update React UI in index.jsx to label Football-Data.org token
+index_path = os.path.join(web_src_dir, "index.jsx")
+with open(index_path, 'r', encoding='utf-8') as f:
+    index_content = f.read()
+
+old_football_label = """                            <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>API-Football KEY</span>
+                            <input
+                                value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API-Football Key 입력..."
+                                className="w-full bg-transparent outline-none"
+                                style={{ ...mono, color: C.accent, fontSize: 12 * scale, padding: `${10 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                            />"""
+
+new_football_label = """                            <div className="p-2.5 rounded mb-1" style={{ background: "rgba(99,102,241,0.06)", border: `1px solid rgba(99,102,241,0.2)` }}>
+                                <span style={{ ...mono, color: C.accent, fontSize: 9.5 * scale }}>
+                                    ✓ Football-Data.org (영구 무료 플랜) 토큰을 사용합니다. (EPL, 챔스, 라리가 등 지원)
+                                </span>
+                            </div>
+                            <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>Football-Data.org API Token</span>
+                            <input
+                                value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Football-Data.org API Token (예: a1b2c3...)"
+                                className="w-full bg-transparent outline-none"
+                                style={{ ...mono, color: C.accent, fontSize: 12 * scale, padding: `${10 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                            />"""
+
+if old_football_label in index_content:
+    index_content = index_content.replace(old_football_label, new_football_label)
+
+with open(index_path, 'w', encoding='utf-8') as f:
+    f.write(index_content)
+
+print("Patch Football-Data.org & persistent triggers applied successfully.")
+
