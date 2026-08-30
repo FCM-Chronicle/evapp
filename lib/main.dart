@@ -389,7 +389,7 @@ class _EVHomePageState extends State<EVHomePage> {
       debugPrint('Received from React: action=$action, payload=$payload');
 
       // Handle actions from React here (e.g., notification_clicked, user_message)
-      if (action == 'notification_clicked') {
+      if (action == 'notification_clicked' || action == 'open_notification') {
         final id = payload['id'];
         debugPrint('Action: open notification $id via PendingIntent');
         if (id != null) {
@@ -399,11 +399,14 @@ class _EVHomePageState extends State<EVHomePage> {
             debugPrint('Error executing PendingIntent: $e');
           }
         }
-      } else if (action == 'user_message') {
+      } else if (action == 'user_message' || action == 'send_message') {
         String text = (payload['text'] as String?) ?? '';
         final source = payload['source'];
         final msgId = payload['id'];
-        final String? attachmentBase64 = payload['attachmentBase64'] as String?;
+        String? attachmentBase64 = payload['attachmentBase64'] as String?;
+        if (attachmentBase64 == null && payload['attachedFile'] is Map) {
+          attachmentBase64 = payload['attachedFile']['base64'] as String?;
+        }
         debugPrint('Action: process user message from $source: $text');
 
         final hasImage = attachmentBase64 != null && attachmentBase64.isNotEmpty;
@@ -437,10 +440,12 @@ class _EVHomePageState extends State<EVHomePage> {
         
         _conversationHistory.clear();
         _conversationHistory.addAll(await LocalStorageService.readConversationHistory());
+        _sendToReact('conversation_history', {'history': _conversationHistory});
         _sendToReact('conversation_sync_init', {'history': _conversationHistory});
 
         _sendToReact('llm_result', {
           'id': msgId,
+          'text': response.text,
           'result': response.text,
           'document': response.document != null
               ? {'title': response.document!.title}
@@ -991,39 +996,53 @@ class _EVHomePageState extends State<EVHomePage> {
         debugPrint('Action: start_voice_chat');
         if (await Permission.microphone.request().isGranted) {
           _sendToReact('voice_input', {'state': 'start'});
+          _sendToReact('voice_state', {'active': true});
           await SttService.startListening(
             onResult: (text) async {
               _sendToReact('voice_input', {'state': 'end'});
+              _sendToReact('voice_state', {'active': false});
+              _sendToReact('stt_text', {'text': text, 'source': 'voice'});
               _sendToReact('spen_text', {'text': text});
               
               _conversationHistory.add({'role': 'user', 'content': text});
               await LocalStorageService.writeConversationHistory(_conversationHistory);
+              _sendToReact('conversation_history', {'history': _conversationHistory});
               _sendToReact('conversation_sync_init', {'history': _conversationHistory});
 
               final llmResponse = await LlmService.generateResponse(text, history: _conversationHistory);
               
               _conversationHistory.add({'role': 'assistant', 'content': llmResponse.text});
               await LocalStorageService.writeConversationHistory(_conversationHistory);
+              _sendToReact('conversation_history', {'history': _conversationHistory});
               _sendToReact('conversation_sync_init', {'history': _conversationHistory});
+              _sendToReact('llm_result', {
+                'id': 'voice_${DateTime.now().millisecondsSinceEpoch}',
+                'text': llmResponse.text,
+                'result': llmResponse.text,
+              });
               
               await TtsService.speak(llmResponse.text);
             },
             onError: (error) {
               debugPrint('STT Error: $error');
               _sendToReact('voice_input', {'state': 'end'});
+              _sendToReact('voice_state', {'active': false});
             },
             onComplete: () {
               _sendToReact('voice_input', {'state': 'end'});
+              _sendToReact('voice_state', {'active': false});
             }
           );
         } else {
           debugPrint('Microphone permission denied');
+          _sendToReact('voice_state', {'active': false});
         }
       } else if (action == 'stop_voice_chat') {
         debugPrint('Action: stop_voice_chat');
         await SttService.stopListening();
         await TtsService.stop();
         _sendToReact('voice_input', {'state': 'end'});
+        _sendToReact('voice_state', {'active': false});
       }
     } catch (e) {
       debugPrint('Error parsing message from React: $e');

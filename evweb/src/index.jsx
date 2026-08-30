@@ -45,7 +45,17 @@ import {
     Terminal,
     Zap,
     Compass,
-    Volume2
+    Volume2,
+    Utensils,
+    PenTool,
+    Eraser,
+    RotateCcw,
+    Search,
+    Building2,
+    Target,
+    Hourglass,
+    Maximize2,
+    Minimize2
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -1052,7 +1062,7 @@ function Switch({ on, onChange }) {
 /* ------------------------------------------------------------------ */
 /* 상단 상태바 (StatusBar)                                            */
 /* ------------------------------------------------------------------ */
-function StatusBar({ onMenu, showBack, onBack, title, darkText = false }) {
+function StatusBar({ onMenu, showBack, onBack, title, darkText = false, pinnedDday, onDdayClick }) {
     return (
         <div
             className="flex items-center justify-between px-4 py-2.5 border-b select-none z-20"
@@ -1089,7 +1099,26 @@ function StatusBar({ onMenu, showBack, onBack, title, darkText = false }) {
                 )}
             </div>
             {!showBack && (
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2.5">
+                    {pinnedDday && (
+                        <button
+                            onClick={onDdayClick}
+                            className="flex items-center gap-1.5 px-2 py-0.5 hud-cut-corner-sm transition-all"
+                            style={{
+                                border: `1px solid ${pinnedDday.color || C.accent}`,
+                                background: "rgba(5,10,20,0.7)",
+                                boxShadow: `0 0 10px ${pinnedDday.color || C.accent}44`,
+                            }}
+                        >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: pinnedDday.color || C.accent }} />
+                            <span style={{ ...orbitron, color: pinnedDday.color || C.accent, fontSize: 10, fontWeight: 700 }}>
+                                {pinnedDday.dInfo.text}
+                            </span>
+                            <span className="truncate max-w-[80px]" style={{ ...sans, color: C.textBright, fontSize: 11 }}>
+                                {pinnedDday.title}
+                            </span>
+                        </button>
+                    )}
                     <span style={{ ...mono, color: C.slate, fontSize: 9.5, letterSpacing: 1 }} className="hidden sm:inline">
                         CORE_v2.4
                     </span>
@@ -1108,17 +1137,20 @@ function StatusBar({ onMenu, showBack, onBack, title, darkText = false }) {
 function SidePanel({ open, onClose, onNavigate, historyOn, onToggleHistory }) {
     const items = [
         { key: "newchat", label: "NEW SESSION // 새 대화", icon: MessageSquarePlus, tone: C.accent },
+        { key: "spen", label: "T-PAD // S펜 풀이 캔버스", icon: PenTool, tone: C.cyanLight },
+        { key: "meal", label: "NEIS MEAL // 학교 급식", icon: Utensils, tone: C.lime },
+        { key: "dday", label: "D-DAY HUB // 디데이 관리", icon: Hourglass, tone: C.accent },
         { key: "todo", label: "TASKS // 오늘의 할 일", icon: CheckSquare, tone: C.lime },
-        { key: "masking", label: "PRIVACY // 개인정보 마스킹", icon: Shield, tone: C.cyan },
+        { key: "wrong", label: "VILLAIN LOG // 오답 노트", icon: BookOpen, tone: C.danger },
+        { key: "calendar", label: "CALENDAR // 일정 매트릭스", icon: CalendarDays, tone: C.lime },
+        { key: "schedule", label: "TIMETABLE // 시간표 관리", icon: Clock, tone: C.cyan },
         { key: "sports", label: "SPORTS // 스포츠 알림", icon: Trophy, tone: C.amber },
         { key: "apikey", label: "AI MODELS // API 설정", icon: KeyRound, tone: C.cyanLight },
-        { key: "schedule", label: "TIMETABLE // 시간표 관리", icon: Clock, tone: C.cyan },
         { key: "paths", label: "DIRECTORY // 경로 설정", icon: FolderOpen, tone: C.slate },
-        { key: "calendar", label: "CALENDAR // 일정 매트릭스", icon: CalendarDays, tone: C.lime },
-        { key: "wrong", label: "VILLAIN LOG // 오답 노트", icon: BookOpen, tone: C.danger },
         { key: "bugle", label: "DAILY BUGLE // 일일 브리핑", icon: FileText, tone: C.accent },
-        { key: "history", label: "ARCHIVES // 이전 대화", icon: History, tone: C.slate },
         { key: "memories", label: "NEURAL MEMORY // Obsidian", icon: FileText, tone: C.cyan },
+        { key: "history", label: "ARCHIVES // 이전 대화", icon: History, tone: C.slate },
+        { key: "masking", label: "PRIVACY // 개인정보 마스킹", icon: Shield, tone: C.cyan },
         { key: "pace", label: "CHRONO PACE // 페이스 계산", icon: Timer, tone: C.lime },
     ];
 
@@ -1453,6 +1485,8 @@ function MainScreen({
     conversationHistoryEvent,
     attachedFileFromNative,
     searchEngineStatusFromParent,
+    pinnedDday,
+    onDdayClick,
 }) {
     const [input, setInput] = useState("");
     const [attachedFile, setAttachedFile] = useState(null);
@@ -1676,7 +1710,7 @@ function MainScreen({
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
         >
-            <StatusBar onMenu={onMenu} />
+            <StatusBar onMenu={onMenu} pinnedDday={pinnedDday} onDdayClick={onDdayClick} />
 
             {/* 메인 스크롤 영역 */}
             <div className="flex-1 overflow-y-auto">
@@ -2996,6 +3030,23 @@ function CalendarScreen({ onBack, calendarMd }) {
     );
 }
 
+
+/* ------------------------------------------------------------------ */
+/* D-Day 계산 유틸리티                                                 */
+/* ------------------------------------------------------------------ */
+function calculateDDay(targetDateStr) {
+    if (!targetDateStr) return { diff: 0, text: "D-DAY", isPast: false, isToday: true };
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const [y, m, d] = targetDateStr.split("-").map(Number);
+    const target = new Date(y, m - 1, d);
+    const diffTime = target.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return { diff: 0, text: "D-DAY", isPast: false, isToday: true };
+    if (diffDays > 0) return { diff: diffDays, text: `D-${diffDays}`, isPast: false, isToday: false };
+    return { diff: diffDays, text: `D+${Math.abs(diffDays)}`, isPast: true, isToday: false };
+}
+
 /* ------------------------------------------------------------------ */
 /* 화면 2-4: 오답 노트 (빌런 도감)                                     */
 /* ------------------------------------------------------------------ */
@@ -3003,6 +3054,7 @@ function WrongNotesScreen({ onBack, notes, onAddNote, processing }) {
     const { scale } = useResponsiveLayout();
     const [activeSubject, setActiveSubject] = useState("전체");
     const [expandedNoteId, setExpandedNoteId] = useState(null);
+    const [spenCanvasNoteId, setSpenCanvasNoteId] = useState(null);
 
     const activeNotes = notes.filter((n) => n.status !== "prison");
     const prisonNotes = notes.filter((n) => n.status === "prison");
@@ -3159,6 +3211,29 @@ function WrongNotesScreen({ onBack, notes, onAddNote, processing }) {
                                                         </div>
                                                     </div>
 
+                                                    {/* S-Pen 풀이 캔버스 토글 */}
+                                                    <div className="flex flex-col gap-2">
+                                                        <button
+                                                            onClick={() => setSpenCanvasNoteId(spenCanvasNoteId === note.id ? null : note.id)}
+                                                            className="w-full py-2 flex items-center justify-center gap-2 hud-cut-corner-sm font-bold"
+                                                            style={{
+                                                                border: `1px solid ${spenCanvasNoteId === note.id ? C.cyanLight : C.cyan}`,
+                                                                background: spenCanvasNoteId === note.id ? "rgba(63,169,245,0.2)" : "rgba(63,169,245,0.08)",
+                                                                color: C.cyanLight,
+                                                                ...orbitron,
+                                                                fontSize: 11,
+                                                                letterSpacing: 1,
+                                                            }}
+                                                        >
+                                                            <PenTool size={14} /> {spenCanvasNoteId === note.id ? "▲ S-PEN 풀이 캔버스 닫기" : "✏️ S-PEN 인터랙티브 풀이장 열기"}
+                                                        </button>
+                                                        {spenCanvasNoteId === note.id && (
+                                                            <div className="mt-1">
+                                                                <SPenCanvas initialHeight={280} problemText={note.problem} onClose={() => setSpenCanvasNoteId(null)} />
+                                                            </div>
+                                                        )}
+                                                    </div>
+
                                                     {!isPrisonTab ? (
                                                         <button
                                                             onClick={() => handleArrest(note.id)}
@@ -3214,6 +3289,902 @@ function WrongNotesScreen({ onBack, notes, onAddNote, processing }) {
                     </div>
                 </div>
             )}
+        </div>
+    );
+}
+
+
+/* ------------------------------------------------------------------ */
+/* S펜 인터랙티브 풀이 캔버스 (SPenCanvas)                               */
+/* ------------------------------------------------------------------ */
+function SPenCanvas({ initialHeight = 320, onClose, problemText }) {
+    const canvasRef = useRef(null);
+    const [tool, setTool] = useState("pen"); // 'pen' | 'eraser'
+    const [color, setColor] = useState("#3FA9F5"); // Cyan
+    const [strokeWidth, setStrokeWidth] = useState(3.5); // 2 | 3.5 | 6 (No pressure variation for crisp handwriting)
+    const [eraserWidth, setEraserWidth] = useState(24);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const [history, setHistory] = useState([]);
+    const [redoList, setRedoList] = useState([]);
+    const isStylusButtonHeldRef = useRef(false);
+    const pointsRef = useRef([]);
+
+    // Canvas init
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        setHistory([ctx.getImageData(0, 0, canvas.width, canvas.height)]);
+    }, []);
+
+    const saveState = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        setHistory((prev) => [...prev.slice(-15), imgData]);
+        setRedoList([]);
+    };
+
+    const handleUndo = () => {
+        if (history.length <= 1) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const lastState = history[history.length - 1];
+        const prevState = history[history.length - 2];
+        setRedoList((prev) => [...prev, lastState]);
+        setHistory((prev) => prev.slice(0, -1));
+        ctx.putImageData(prevState, 0, 0);
+    };
+
+    const handleRedo = () => {
+        if (redoList.length === 0) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const nextState = redoList[redoList.length - 1];
+        setRedoList((prev) => prev.slice(0, -1));
+        setHistory((prev) => [...prev, nextState]);
+        ctx.putImageData(nextState, 0, 0);
+    };
+
+    const handleClear = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        saveState();
+    };
+
+    const getCanvasPos = (e) => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top,
+        };
+    };
+
+    const onPointerDown = (e) => {
+        if (e.target.setPointerCapture) {
+            try { e.target.setPointerCapture(e.pointerId); } catch(err){}
+        }
+
+        // S-Pen Barrel button detection: (e.buttons & 32) != 0 or button === 2 / 5
+        const isBarrel = (e.buttons & 32) !== 0 || e.button === 5 || (e.pointerType === "pen" && (e.button === 2 || e.buttons === 2));
+        isStylusButtonHeldRef.current = isBarrel;
+
+        setIsDrawing(true);
+        const pos = getCanvasPos(e);
+        pointsRef.current = [pos];
+
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        const currentMode = isBarrel ? "eraser" : tool;
+
+        ctx.beginPath();
+        if (currentMode === "eraser") {
+            ctx.globalCompositeOperation = "destination-out";
+            ctx.lineWidth = eraserWidth;
+        } else {
+            ctx.globalCompositeOperation = "source-over";
+            ctx.strokeStyle = color;
+            ctx.lineWidth = strokeWidth; // Fixed crisp line width (no pressure variation)
+        }
+        ctx.moveTo(pos.x, pos.y);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+    };
+
+    const drawSegments = (events) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+
+        for (const ev of events) {
+            const pos = getCanvasPos(ev);
+            const isBarrel = (ev.buttons & 32) !== 0 || ev.button === 5 || (ev.pointerType === "pen" && (ev.button === 2 || ev.buttons === 2));
+            const currentMode = isBarrel ? "eraser" : tool;
+
+            if (currentMode === "eraser") {
+                ctx.globalCompositeOperation = "destination-out";
+                ctx.lineWidth = eraserWidth;
+            } else {
+                ctx.globalCompositeOperation = "source-over";
+                ctx.strokeStyle = color;
+                ctx.lineWidth = strokeWidth;
+            }
+
+            pointsRef.current.push(pos);
+            const pts = pointsRef.current;
+
+            if (pts.length >= 3) {
+                const xc = (pts[pts.length - 2].x + pts[pts.length - 1].x) / 2;
+                const yc = (pts[pts.length - 2].y + pts[pts.length - 1].y) / 2;
+                ctx.beginPath();
+                ctx.moveTo(pts[pts.length - 3].x, pts[pts.length - 3].y);
+                ctx.quadraticCurveTo(pts[pts.length - 2].x, pts[pts.length - 2].y, xc, yc);
+                ctx.stroke();
+            } else if (pts.length === 2) {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                ctx.lineTo(pts[1].x, pts[1].y);
+                ctx.stroke();
+            }
+        }
+    };
+
+    const onPointerMove = (e) => {
+        if (!isDrawing) return;
+        const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+        drawSegments(events);
+    };
+
+    const onPointerUp = (e) => {
+        if (!isDrawing) return;
+        setIsDrawing(false);
+        pointsRef.current = [];
+        saveState();
+        if (e.target.releasePointerCapture) {
+            try { e.target.releasePointerCapture(e.pointerId); } catch(err){}
+        }
+    };
+
+    return (
+        <div className="flex flex-col w-full hud-glass-panel hud-cut-corner p-3 border" style={{ borderColor: C.panelBorder, background: "rgba(5, 7, 16, 0.92)" }}>
+            <div className="flex items-center justify-between pb-2 border-b mb-2" style={{ borderColor: C.panelBorder }}>
+                <div className="flex items-center gap-1.5">
+                    <PenTool size={13} color={C.cyanLight} />
+                    <span style={{ ...orbitron, color: C.cyanLight, fontSize: 10.5, letterSpacing: 1 }}>
+                        [ S-PEN SCRATCHPAD ]
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded text-[8.5px]" style={{ ...mono, background: "rgba(63,169,245,0.15)", color: C.cyan }}>
+                        S펜 버튼: 지우개 자동 전환
+                    </span>
+                </div>
+                {onClose && (
+                    <button onClick={onClose} className="p-1 text-slate-400 hover:text-white">
+                        <X size={16} />
+                    </button>
+                )}
+            </div>
+
+            {problemText && (
+                <div className="mb-2 p-2 hud-cut-corner-sm text-xs text-slate-300 max-h-20 overflow-y-auto" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.panelBorder}` }}>
+                    <span style={{ ...orbitron, color: C.accent, fontSize: 9 }}>PROBLEM: </span>{problemText}
+                </div>
+            )}
+
+            <div className="relative w-full rounded overflow-hidden" style={{ height: initialHeight, background: "#050811", border: `1px solid ${C.panelBorder}`, touchAction: "none" }}>
+                <canvas
+                    ref={canvasRef}
+                    className="w-full h-full cursor-crosshair"
+                    style={{ touchAction: "none" }}
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={onPointerUp}
+                    onPointerCancel={onPointerUp}
+                    onPointerLeave={onPointerUp}
+                />
+            </div>
+
+            <div className="flex items-center justify-between mt-2.5 pt-2 border-t gap-2 flex-wrap" style={{ borderColor: C.panelBorder }}>
+                <div className="flex items-center gap-1">
+                    <button
+                        onClick={() => setTool("pen")}
+                        className="px-2.5 py-1 flex items-center gap-1 hud-cut-corner-sm transition-all"
+                        style={{
+                            border: `1px solid ${tool === "pen" ? color : C.panelBorder}`,
+                            background: tool === "pen" ? `${color}22` : "transparent",
+                            color: tool === "pen" ? color : C.slate,
+                            ...rajdhani,
+                            fontWeight: 700,
+                            fontSize: 12,
+                        }}
+                    >
+                        <PenTool size={12} /> 펜
+                    </button>
+                    <button
+                        onClick={() => setTool("eraser")}
+                        className="px-2.5 py-1 flex items-center gap-1 hud-cut-corner-sm transition-all"
+                        style={{
+                            border: `1px solid ${tool === "eraser" ? C.accent : C.panelBorder}`,
+                            background: tool === "eraser" ? "rgba(255,59,78,0.2)" : "transparent",
+                            color: tool === "eraser" ? C.accent : C.slate,
+                            ...rajdhani,
+                            fontWeight: 700,
+                            fontSize: 12,
+                        }}
+                    >
+                        <Eraser size={12} /> 지우개
+                    </button>
+                </div>
+
+                {tool === "pen" && (
+                    <div className="flex items-center gap-1.5">
+                        {["#3FA9F5", "#00F5A0", "#FF3B4E", "#FFA24C", "#FFFFFF"].map((c) => (
+                            <button
+                                key={c}
+                                onClick={() => setColor(c)}
+                                className="w-4 h-4 rounded-full transition-transform"
+                                style={{
+                                    background: c,
+                                    boxShadow: color === c ? `0 0 8px ${c}` : "none",
+                                    transform: color === c ? "scale(1.25)" : "scale(1)",
+                                    border: color === c ? "1.5px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+                                }}
+                            />
+                        ))}
+                    </div>
+                )}
+
+                <div className="flex items-center gap-1">
+                    {[
+                        { label: "얇게", w: 2 },
+                        { label: "보통", w: 3.5 },
+                        { label: "굵게", w: 6 },
+                    ].map((item) => (
+                        <button
+                            key={item.label}
+                            onClick={() => (tool === "eraser" ? setEraserWidth(item.w * 6) : setStrokeWidth(item.w))}
+                            className="px-2 py-0.5 text-[10px] hud-cut-corner-sm"
+                            style={{
+                                border: `1px solid ${(tool === "pen" ? strokeWidth === item.w : eraserWidth === item.w * 6) ? C.cyan : C.panelBorder}`,
+                                color: (tool === "pen" ? strokeWidth === item.w : eraserWidth === item.w * 6) ? C.cyanLight : C.slate,
+                                ...mono,
+                            }}
+                        >
+                            {item.label}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="flex items-center gap-1 ml-auto">
+                    <button
+                        onClick={handleUndo}
+                        disabled={history.length <= 1}
+                        className="p-1.5 hud-cut-corner-sm text-slate-400 hover:text-white disabled:opacity-30"
+                        title="실행 취소"
+                    >
+                        <RotateCcw size={13} />
+                    </button>
+                    <button
+                        onClick={handleClear}
+                        className="px-2 py-1 text-[11px] hud-cut-corner-sm text-red-400 hover:bg-red-500/10"
+                        style={{ border: `1px solid ${C.panelBorderRed}`, ...mono }}
+                    >
+                        지우기
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/* 독립 S펜 풀이 화면 (SPenScreen)                                    */
+/* ------------------------------------------------------------------ */
+function SPenScreen({ onBack }) {
+    const { screenH } = useResponsiveLayout();
+    return (
+        <div className="flex flex-col h-full relative">
+            <StatusBar showBack onBack={onBack} title="TACTICAL S-PEN CANVAS" />
+            <div className="flex-1 p-3 flex flex-col">
+                <SPenCanvas initialHeight={Math.max(screenH - 220, 360)} />
+            </div>
+        </div>
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/* 화면 2-6: NEIS 전국 학교 급식 (MealScreen)                          */
+/* ------------------------------------------------------------------ */
+function MealScreen({ onBack, schoolInfo }) {
+    const [savedSchool, setSavedSchool] = useState(schoolInfo);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [isSearching, setIsSearching] = useState(false);
+    const [searchResults, setSearchResults] = useState([]);
+    const [showSearchModal, setShowSearchModal] = useState(false);
+    const [dateOffset, setDateOffset] = useState(0); // 0 = today, 1 = tomorrow, -1 = yesterday
+    const [mealData, setMealData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [activeTab, setActiveTab] = useState("전체"); // '전체' | '조식' | '중식' | '석식'
+
+    const targetDateStr = useMemo(() => {
+        const d = new Date();
+        d.setDate(d.getDate() + dateOffset);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}${m}${day}`;
+    }, [dateOffset]);
+
+    const formattedDateTitle = useMemo(() => {
+        const d = new Date();
+        d.setDate(d.getDate() + dateOffset);
+        const m = d.getMonth() + 1;
+        const day = d.getDate();
+        const days = ["일", "월", "화", "수", "목", "금", "토"];
+        const dayName = days[d.getDay()];
+        const tag = dateOffset === 0 ? "오늘" : dateOffset === 1 ? "내일" : dateOffset === -1 ? "어제" : "";
+        return `${m}월 ${day}일 (${dayName}) ${tag}`;
+    }, [dateOffset]);
+
+    // Flutter 이벤트 리스너
+    useEffect(() => {
+        const handleSync = (e) => {
+            const payload = e.detail;
+            if (payload?.type === "school_search_result") {
+                setSearchResults(payload.schools || []);
+                setIsSearching(false);
+            } else if (payload?.type === "school_info_sync") {
+                if (payload.schoolCode) {
+                    setSavedSchool(payload);
+                    setShowSearchModal(false);
+                }
+            } else if (payload?.type === "school_meal_result") {
+                setMealData(payload);
+                setLoading(false);
+            }
+        };
+        window.addEventListener("ev-native-event", handleSync);
+        sendToFlutter("get_school_info", {});
+        return () => window.removeEventListener("ev-native-event", handleSync);
+    }, []);
+
+    // 날짜나 학교 변경 시 급식 로드
+    useEffect(() => {
+        if (savedSchool?.schoolCode) {
+            setLoading(true);
+            sendToFlutter("get_school_meal", { date: targetDateStr });
+        }
+    }, [savedSchool, targetDateStr]);
+
+    const handleSearch = () => {
+        if (!searchQuery.trim()) return;
+        setIsSearching(true);
+        sendToFlutter("search_school", { query: searchQuery.trim() });
+    };
+
+    const handleSelectSchool = (sch) => {
+        sendToFlutter("save_school_info", {
+            schoolName: sch.schoolName,
+            officeCode: sch.officeCode,
+            schoolCode: sch.schoolCode,
+        });
+        setSavedSchool(sch);
+        setShowSearchModal(false);
+    };
+
+    const filteredMeals = useMemo(() => {
+        if (!mealData?.meals) return [];
+        if (activeTab === "전체") return mealData.meals;
+        return mealData.meals.filter((m) => m.typeName === activeTab);
+    }, [mealData, activeTab]);
+
+    return (
+        <div className="flex flex-col h-full relative">
+            <StatusBar showBack onBack={onBack} title="NEIS SCHOOL MEAL" />
+
+            <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
+                {/* 상단 학교 정보 배너 */}
+                <div className="flex items-center justify-between p-3.5 hud-cut-corner hud-glass-panel" style={{ borderColor: C.panelBorder }}>
+                    <div className="flex items-center gap-2.5">
+                        <Utensils size={18} color={C.lime} />
+                        <div className="flex flex-col">
+                            <span style={{ ...orbitron, color: C.lime, fontSize: 9.5, letterSpacing: 1 }}>REGISTERED SCHOOL</span>
+                            <span style={{ ...rajdhani, color: C.textBright, fontSize: 16, fontWeight: 700 }}>
+                                {savedSchool?.schoolName || "학교 등록 필요"}
+                            </span>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => setShowSearchModal(true)}
+                        className="px-3 py-1.5 hud-cut-corner-sm flex items-center gap-1"
+                        style={{ border: `1px solid ${C.cyan}`, color: C.cyanLight, ...mono, fontSize: 11 }}
+                    >
+                        <Search size={11} /> {savedSchool ? "학교 변경" : "학교 검색"}
+                    </button>
+                </div>
+
+                {/* 날짜 선택 네비게이터 */}
+                <div className="flex items-center justify-between p-2 hud-cut-corner-sm hud-glass-panel" style={{ borderColor: C.panelBorder }}>
+                    <button
+                        onClick={() => setDateOffset((prev) => prev - 1)}
+                        className="p-1.5 text-slate-400 hover:text-white"
+                    >
+                        <ChevronLeft size={18} />
+                    </button>
+                    <div className="flex items-center gap-2">
+                        <CalendarDays size={14} color={C.cyan} />
+                        <span style={{ ...rajdhani, color: C.textBright, fontSize: 15, fontWeight: 600 }}>
+                            {formattedDateTitle}
+                        </span>
+                        {dateOffset !== 0 && (
+                            <button
+                                onClick={() => setDateOffset(0)}
+                                className="px-2 py-0.5 text-[10px] hud-cut-corner-sm"
+                                style={{ border: `1px solid ${C.lime}`, color: C.lime, ...mono }}
+                            >
+                                오늘
+                            </button>
+                        )}
+                    </div>
+                    <button
+                        onClick={() => setDateOffset((prev) => prev + 1)}
+                        className="p-1.5 text-slate-400 hover:text-white"
+                    >
+                        <ChevronRight size={18} />
+                    </button>
+                </div>
+
+                {/* 조식 / 중식 / 석식 탭 */}
+                <div className="flex gap-2">
+                    {["전체", "조식", "중식", "석식"].map((tab) => {
+                        const active = activeTab === tab;
+                        return (
+                            <button
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className="flex-1 py-1.5 hud-cut-corner-sm transition-all"
+                                style={{
+                                    border: `1px solid ${active ? C.lime : C.panelBorder}`,
+                                    background: active ? "rgba(0,245,160,0.15)" : "transparent",
+                                    color: active ? C.lime : C.slate,
+                                    ...rajdhani,
+                                    fontWeight: 700,
+                                    fontSize: 13,
+                                }}
+                            >
+                                {tab}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* 급식 식단 리스트 */}
+                {loading ? (
+                    <div className="flex-1 flex flex-col items-center justify-center py-16 gap-3">
+                        <WebNodeLoader size={60} tone={C.lime} />
+                        <span style={{ ...orbitron, color: C.lime, fontSize: 11, letterSpacing: 1.5 }}>
+                            FETCHING NEIS INTEL...
+                        </span>
+                    </div>
+                ) : !savedSchool ? (
+                    <div className="flex-1 flex flex-col items-center justify-center py-16 gap-3 text-center">
+                        <Building2 size={36} color={C.slate} opacity={0.5} />
+                        <span style={{ ...sans, color: C.slate, fontSize: 13 }}>
+                            등록된 학교가 없습니다.<br />위의 [학교 검색] 버튼을 눌러 학교를 설정해 주세요.
+                        </span>
+                    </div>
+                ) : filteredMeals.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center py-16 gap-2 text-center">
+                        <Utensils size={32} color={C.slate} opacity={0.4} />
+                        <span style={{ ...sans, color: C.slate, fontSize: 13 }}>
+                            {mealData?.message || "해당 일자에는 등록된 급식 식단이 없습니다."}
+                        </span>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-3">
+                        {filteredMeals.map((meal, idx) => (
+                            <div
+                                key={idx}
+                                className="flex flex-col hud-cut-corner hud-glass-panel p-4"
+                                style={{ borderColor: C.panelBorder, boxShadow: `0 0 16px rgba(0,245,160,0.08)` }}
+                            >
+                                <div className="flex items-center justify-between pb-2 border-b mb-3" style={{ borderColor: C.panelBorder }}>
+                                    <div className="flex items-center gap-2">
+                                        <span className="px-2 py-0.5 hud-cut-corner-sm" style={{ background: "rgba(0,245,160,0.18)", color: C.lime, ...orbitron, fontSize: 10, fontWeight: 700 }}>
+                                            {meal.typeName}
+                                        </span>
+                                        <span style={{ ...rajdhani, color: C.textBright, fontSize: 14, fontWeight: 600 }}>
+                                            {savedSchool.schoolName}
+                                        </span>
+                                    </div>
+                                    {meal.calories && (
+                                        <span style={{ ...mono, color: C.amber, fontSize: 11 }}>
+                                            🔥 {meal.calories}
+                                        </span>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-col gap-1.5 pl-1">
+                                    {(meal.dishes || []).map((dish, dIdx) => (
+                                        <div key={dIdx} className="flex items-center gap-2">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-[#00F5A0]" />
+                                            <span style={{ ...sans, color: C.textBright, fontSize: 13.5 }}>
+                                                {dish}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* 학교 검색 모달 */}
+            <AnimatePresence>
+                {showSearchModal && (
+                    <motion.div
+                        className="absolute inset-0 z-50 flex flex-col p-4"
+                        style={{ background: "rgba(5, 7, 16, 0.96)", backdropFilter: "blur(12px)" }}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                    >
+                        <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: C.panelBorder }}>
+                            <span style={{ ...orbitron, color: C.cyanLight, fontSize: 12, letterSpacing: 1.5 }}>
+                                [ NEIS 학교 검색 & 등록 ]
+                            </span>
+                            <button onClick={() => setShowSearchModal(false)} className="p-1 text-slate-400 hover:text-white">
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="flex gap-2 mt-4">
+                            <input
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                                placeholder="학교 이름 입력 (예: 서울고, 경기고, 대원외고)"
+                                className="flex-1 bg-transparent px-3 py-2 hud-cut-corner-sm outline-none"
+                                style={{ border: `1px solid ${C.panelBorder}`, color: C.cyanLight, ...sans, fontSize: 13 }}
+                            />
+                            <button
+                                onClick={handleSearch}
+                                disabled={isSearching}
+                                className="px-4 py-2 hud-cut-corner-sm flex items-center gap-1 font-bold"
+                                style={{ background: C.cyan, color: "#050710", ...orbitron, fontSize: 11 }}
+                            >
+                                <Search size={14} /> 검색
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto mt-4 flex flex-col gap-2">
+                            {isSearching ? (
+                                <div className="flex-1 flex items-center justify-center py-10">
+                                    <WebNodeLoader size={50} tone={C.cyan} />
+                                </div>
+                            ) : searchResults.length === 0 ? (
+                                <div className="py-10 text-center text-slate-500 text-xs">
+                                    검색된 학교가 없습니다. 학교명을 입력하고 검색해 주세요.
+                                </div>
+                            ) : (
+                                searchResults.map((sch, idx) => (
+                                    <button
+                                        key={idx}
+                                        onClick={() => handleSelectSchool(sch)}
+                                        className="w-full text-left p-3 hud-cut-corner-sm hud-glass-panel hover:border-cyan-400 transition-all flex flex-col gap-1"
+                                        style={{ borderColor: C.panelBorder }}
+                                    >
+                                        <div className="flex items-center justify-between">
+                                            <span style={{ ...rajdhani, color: C.textBright, fontSize: 15, fontWeight: 700 }}>
+                                                {sch.schoolName}
+                                            </span>
+                                            <span className="px-1.5 py-0.5 text-[9px] rounded" style={{ ...mono, background: "rgba(63,169,245,0.15)", color: C.cyan }}>
+                                                {sch.schoolType || "학교"}
+                                            </span>
+                                        </div>
+                                        <span style={{ ...sans, color: C.slate, fontSize: 11 }}>
+                                            {sch.address}
+                                        </span>
+                                    </button>
+                                ))
+                            )}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/* 화면 2-7: D-Day HUD 카운트다운 허브 (DDayScreen)                     */
+/* ------------------------------------------------------------------ */
+function DDayScreen({ onBack, ddays = [], onSaveDdays }) {
+    const [items, setItems] = useState(ddays);
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [newTitle, setNewTitle] = useState("");
+    const [newDate, setNewDate] = useState("");
+    const [newColor, setNewColor] = useState("#FF3B4E");
+    const [newPinned, setNewPinned] = useState(false);
+
+    useEffect(() => {
+        setItems(ddays);
+    }, [ddays]);
+
+    const handleAdd = () => {
+        if (!newTitle.trim() || !newDate) {
+            alert("일정 제목과 날짜를 입력해 주세요.");
+            return;
+        }
+        const newItem = {
+            id: `dday_${Date.now()}`,
+            title: newTitle.trim(),
+            targetDate: newDate,
+            color: newColor,
+            pinned: newPinned,
+        };
+        const updated = [...items, newItem];
+        setItems(updated);
+        onSaveDdays?.(updated);
+        setNewTitle("");
+        setNewDate("");
+        setNewPinned(false);
+        setShowAddModal(false);
+    };
+
+    const handleDelete = (id) => {
+        const updated = items.filter((d) => d.id !== id);
+        setItems(updated);
+        onSaveDdays?.(updated);
+    };
+
+    const handleTogglePin = (id) => {
+        const updated = items.map((d) => (d.id === id ? { ...d, pinned: !d.pinned } : d));
+        setItems(updated);
+        onSaveDdays?.(updated);
+    };
+
+    // D-Day 정렬: Pinned 우선 -> 임박한 순
+    const sortedItems = useMemo(() => {
+        return [...items].sort((a, b) => {
+            if (a.pinned && !b.pinned) return -1;
+            if (!a.pinned && b.pinned) return 1;
+            const diffA = calculateDDay(a.targetDate).diff;
+            const diffB = calculateDDay(b.targetDate).diff;
+            return diffA - diffB;
+        });
+    }, [items]);
+
+    return (
+        <div className="flex flex-col h-full relative">
+            <StatusBar showBack onBack={onBack} title="D-DAY TACTICAL HUB" />
+
+            <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                    <span style={{ ...orbitron, color: C.accent, fontSize: 10.5, letterSpacing: 1.5 }}>
+                        [ ACTIVE COUNTDOWNS: {sortedItems.length} ]
+                    </span>
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 hud-cut-corner-sm"
+                        style={{
+                            border: `1px solid ${C.accent}`,
+                            background: "rgba(255,59,78,0.18)",
+                            color: C.accent,
+                            ...orbitron,
+                            fontSize: 10.5,
+                            letterSpacing: 1,
+                        }}
+                    >
+                        <Plus size={13} /> + ADD D-DAY
+                    </button>
+                </div>
+
+                {sortedItems.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center py-20 gap-3 text-center">
+                        <Hourglass size={36} color={C.slate} opacity={0.4} />
+                        <span style={{ ...sans, color: C.slate, fontSize: 13 }}>
+                            등록된 D-Day 일정이 없습니다.<br />+ ADD D-DAY 버튼을 눌러 중요한 시험/일정을 등록하세요.
+                        </span>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-3">
+                        {sortedItems.map((item) => {
+                            const dInfo = calculateDDay(item.targetDate);
+                            const tone = item.color || C.accent;
+                            return (
+                                <div
+                                    key={item.id}
+                                    className="flex items-center justify-between p-4 hud-cut-corner hud-glass-panel relative overflow-hidden"
+                                    style={{
+                                        borderColor: item.pinned ? tone : C.panelBorder,
+                                        boxShadow: item.pinned ? `0 0 16px ${tone}44, inset 0 0 8px ${tone}18` : "none",
+                                    }}
+                                >
+                                    {/* Pinned Marker */}
+                                    {item.pinned && (
+                                        <div className="absolute top-0 right-0 w-8 h-8 pointer-events-none overflow-hidden">
+                                            <div
+                                                className="absolute transform rotate-45 text-[8px] font-bold text-center text-black py-0.5 w-12 top-1.5 -right-3"
+                                                style={{ background: tone, ...orbitron }}
+                                            >
+                                                PIN
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="flex items-center gap-3.5 flex-1 min-w-0">
+                                        {/* Spider-Web Reticle Badge */}
+                                        <div
+                                            className="w-14 h-14 rounded-full flex flex-col items-center justify-center flex-shrink-0 relative overflow-hidden"
+                                            style={{
+                                                border: `1.8px solid ${tone}`,
+                                                background: "rgba(5,10,20,0.85)",
+                                                boxShadow: `0 0 14px ${tone}55, inset 0 0 8px ${tone}22`,
+                                            }}
+                                        >
+                                            {/* Spider Web Spoke Lines */}
+                                            <div className="absolute inset-0 pointer-events-none opacity-25">
+                                                <svg viewBox="0 0 56 56" className="w-full h-full">
+                                                    <line x1="28" y1="0" x2="28" y2="56" stroke={tone} strokeWidth="0.8" strokeDasharray="2,2" />
+                                                    <line x1="0" y1="28" x2="56" y2="28" stroke={tone} strokeWidth="0.8" strokeDasharray="2,2" />
+                                                    <circle cx="28" cy="28" r="18" fill="none" stroke={tone} strokeWidth="0.6" opacity="0.6" />
+                                                </svg>
+                                            </div>
+                                            <span style={{ ...orbitron, color: tone, fontSize: 13, fontWeight: 900, lineHeight: 1, zIndex: 2 }}>
+                                                {dInfo.text}
+                                            </span>
+                                        </div>
+
+                                        <div className="flex flex-col min-w-0 flex-1">
+                                            <span className="truncate" style={{ ...rajdhani, color: C.textBright, fontSize: 16, fontWeight: 700 }}>
+                                                {item.title}
+                                            </span>
+                                            <span style={{ ...mono, color: C.slate, fontSize: 11 }}>
+                                                목표일: {item.targetDate}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* Actions */}
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={() => handleTogglePin(item.id)}
+                                            className="p-1.5 hud-cut-corner-sm transition-all"
+                                            style={{
+                                                border: `1px solid ${item.pinned ? tone : C.panelBorder}`,
+                                                color: item.pinned ? tone : C.slate,
+                                                fontSize: 10,
+                                            }}
+                                            title="상단 고정 (HUD 상시 표시)"
+                                        >
+                                            <Target size={14} />
+                                        </button>
+                                        <button
+                                            onClick={() => handleDelete(item.id)}
+                                            className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
+                                            title="삭제"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+
+            {/* D-Day 추가 모달 */}
+            <AnimatePresence>
+                {showAddModal && (
+                    <motion.div
+                        className="absolute inset-0 z-50 flex flex-col p-4"
+                        style={{ background: "rgba(5, 7, 16, 0.96)", backdropFilter: "blur(12px)" }}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                    >
+                        <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: C.panelBorder }}>
+                            <span style={{ ...orbitron, color: C.accent, fontSize: 12, letterSpacing: 1.5 }}>
+                                [ D-DAY TARGET REGISTRATION ]
+                            </span>
+                            <button onClick={() => setShowAddModal(false)} className="p-1 text-slate-400 hover:text-white">
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="flex flex-col gap-4 mt-5">
+                            <div className="flex flex-col gap-1.5">
+                                <span style={{ ...mono, color: C.slate, fontSize: 10.5 }}>일정 / 시험 제목</span>
+                                <input
+                                    value={newTitle}
+                                    onChange={(e) => setNewTitle(e.target.value)}
+                                    placeholder="예: 2027 수능, 2학기 중간고사, 전국모의고사"
+                                    className="bg-transparent px-3 py-2 hud-cut-corner-sm outline-none"
+                                    style={{ border: `1px solid ${C.panelBorder}`, color: C.textBright, ...sans, fontSize: 13 }}
+                                />
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                                <span style={{ ...mono, color: C.slate, fontSize: 10.5 }}>목표 날짜 (YYYY-MM-DD)</span>
+                                <input
+                                    type="date"
+                                    value={newDate}
+                                    onChange={(e) => setNewDate(e.target.value)}
+                                    className="bg-transparent px-3 py-2 hud-cut-corner-sm outline-none"
+                                    style={{ border: `1px solid ${C.panelBorder}`, color: C.cyanLight, ...mono, fontSize: 13 }}
+                                />
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                                <span style={{ ...mono, color: C.slate, fontSize: 10.5 }}>네온 테마 컬러</span>
+                                <div className="flex items-center gap-2">
+                                    {["#FF3B4E", "#3FA9F5", "#00F5A0", "#FFA24C", "#C084FC"].map((c) => (
+                                        <button
+                                            key={c}
+                                            type="button"
+                                            onClick={() => setNewColor(c)}
+                                            className="w-7 h-7 rounded-full transition-transform"
+                                            style={{
+                                                background: c,
+                                                boxShadow: newColor === c ? `0 0 10px ${c}` : "none",
+                                                transform: newColor === c ? "scale(1.2)" : "scale(1)",
+                                                border: newColor === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.2)",
+                                            }}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between p-3 hud-cut-corner-sm" style={{ border: `1px solid ${C.panelBorder}`, background: "rgba(255,255,255,0.02)" }}>
+                                <span style={{ ...sans, color: C.textBright, fontSize: 12.5 }}>메인 HUD 상단 고정 (PIN)</span>
+                                <button
+                                    type="button"
+                                    onClick={() => setNewPinned(!newPinned)}
+                                    className="px-3 py-1 hud-cut-corner-sm"
+                                    style={{
+                                        border: `1px solid ${newPinned ? C.accent : C.slate}`,
+                                        color: newPinned ? C.accent : C.slate,
+                                        ...mono,
+                                        fontSize: 11,
+                                    }}
+                                >
+                                    {newPinned ? "PINNED // ON" : "OFF"}
+                                </button>
+                            </div>
+
+                            <button
+                                onClick={handleAdd}
+                                className="w-full py-3 mt-4 hud-cut-corner font-bold flex items-center justify-center gap-2"
+                                style={{
+                                    background: C.accent,
+                                    color: "#fff",
+                                    ...orbitron,
+                                    fontSize: 12,
+                                    letterSpacing: 1.5,
+                                    boxShadow: `0 0 16px rgba(255,59,78,0.4)`,
+                                }}
+                            >
+                                <Check size={16} /> REGISTER D-DAY TARGET
+                            </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
@@ -3645,15 +4616,34 @@ export default function EVApp() {
                         triggerAlert("done");
                     }
                     break;
+                case "bluetooth_connected":
+                    triggerToast({ eyebrow: "BLUETOOTH", message: `${payload.name || "디바이스"} 연결됨`, icon: Bluetooth, color: C.cyanLight });
+                    break;
+                case "save_shared_result":
+                    if (payload.success) {
+                        triggerToast({
+                            eyebrow: payload.type === "obsidian" ? "OBSIDIAN" : "VILLAIN LOG",
+                            message: "성공적으로 저장되었습니다.",
+                            icon: payload.type === "obsidian" ? FolderOpen : Pencil,
+                            color: C.lime,
+                        });
+                        setSharedOcrData(null);
+                        triggerAlert("done");
+                    } else {
+                        alert(`저장 실패: ${payload.error || "알 수 없는 오류"}`);
+                        triggerAlert("error");
+                    }
+                    break;
                 case "search_status":
                     setSearchEngineStatus(payload.engine || null);
                     break;
+                case "spen_text":
                 case "stt_text":
                 case "text_inject":
                     setTextInjectEvent({ text: payload.text, source: payload.source || "voice" });
                     break;
                 case "llm_result":
-                    setLlmResultEvent({ id: payload.id, text: payload.text });
+                    setLlmResultEvent({ id: payload.id, text: payload.text || payload.result });
                     break;
                 case "conversation_history":
                 case "conversation_sync_init":
@@ -3663,6 +4653,9 @@ export default function EVApp() {
                     if (payload.name && payload.base64) {
                         setAttachedFile({ name: payload.name, base64: payload.base64 });
                     }
+                    break;
+                case "voice_input":
+                    setMicActive(payload.state === "start");
                     break;
                 case "voice_state":
                     setMicActive(payload.active === true || payload.active === "true");
@@ -3720,6 +4713,9 @@ export default function EVApp() {
                     {screen === "welcome" && <WelcomeScreen onLogin={() => setScreen("main")} />}
                     {screen === "main" && (
                         <MainScreen
+                            pinnedDday={pinnedDday}
+                            onDdayClick={() => goto("dday")}
+
                             onMenu={() => setMenuOpen(true)}
                             menuOpen={menuOpen}
                             onCloseMenu={() => setMenuOpen(false)}
@@ -3762,6 +4758,15 @@ export default function EVApp() {
                         <MemoriesScreen
                             onBack={() => goto("main")}
                             content={memoriesContent}
+                        />
+                    )}
+                    {screen === "spen" && <SPenScreen onBack={() => goto("main")} />}
+                    {screen === "meal" && <MealScreen onBack={() => goto("main")} schoolInfo={schoolInfo} />}
+                    {screen === "dday" && (
+                        <DDayScreen
+                            onBack={() => goto("main")}
+                            ddays={ddays}
+                            onSaveDdays={(list) => sendToFlutter("save_ddays", { ddays: list })}
                         />
                     )}
                     {screen === "calendar" && <CalendarScreen onBack={() => goto("main")} calendarMd={calendarMd} />}
