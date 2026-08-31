@@ -23,6 +23,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart' as fp;
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'notification_service.dart';
+import 'meal_service.dart';
 import 'playlist_service.dart';
 import 'obsidian_service.dart';
 import 'stt_service.dart';
@@ -101,7 +102,9 @@ class _EVHomePageState extends State<EVHomePage> {
       _sendToReact('shared_image_processing', {'state': 'start'});
       final file = File(path);
       final bytes = await file.readAsBytes();
-      final base64Image = 'data:image/${path.split('.').last};base64,${base64Encode(bytes)}';
+      final ext = path.split('.').last.toLowerCase();
+      final mime = (ext == 'jpg' || ext == 'jpeg') ? 'jpeg' : (ext == 'png' ? 'png' : 'webp');
+      final base64Image = 'data:image/$mime;base64,${base64Encode(bytes)}';
 
       // Vision AI 직접 호출 (텍스트+수식+도형 원스톱 분석)
       final processed = await LlmService.processOcrForWrongNoteImage(base64Image);
@@ -410,6 +413,7 @@ class _EVHomePageState extends State<EVHomePage> {
         debugPrint('Action: process user message from $source: $text');
 
         final hasImage = attachmentBase64 != null && attachmentBase64.isNotEmpty;
+        debugPrint('user_message: text="$text", hasImage=$hasImage, base64Len=${attachmentBase64?.length ?? 0}');
         if (text.trim().isEmpty && !hasImage) {
           return;
         }
@@ -608,6 +612,7 @@ class _EVHomePageState extends State<EVHomePage> {
             _sendToReact('file_picked', {
               'success': true,
               'filename': result.files.single.name,
+              'name': result.files.single.name,
               'text': extractedText,
             });
           } else {
@@ -641,9 +646,12 @@ class _EVHomePageState extends State<EVHomePage> {
         final prefs = await SharedPreferences.getInstance();
         _sendToReact('sports_settings_sync', {
           'sportType': prefs.getString('SPORTS_TYPE') ?? 'football',
-          'apiKey': prefs.getString('API_FOOTBALL_KEY') ?? '',
+          'apiKey': prefs.getString('API_FOOTBALL_KEY') ?? prefs.getString('FOOTBALL_DATA_API_KEY') ?? '',
+          'footballDataKey': prefs.getString('FOOTBALL_DATA_API_KEY') ?? prefs.getString('API_FOOTBALL_KEY') ?? '',
           'firecrawlKey': prefs.getString('FIRECRAWL_API_KEY') ?? '',
           'teamName': prefs.getString('SPORTS_TEAM_NAME') ?? '',
+          'footballTeams': prefs.getString('FOOTBALL_TEAMS') ?? prefs.getString('SPORTS_TEAM_NAME') ?? '',
+          'baseballTeams': prefs.getString('BASEBALL_TEAMS') ?? '',
           'active': prefs.getBool('SPORTS_ACTIVE') ?? false,
         });
 
@@ -669,6 +677,10 @@ class _EVHomePageState extends State<EVHomePage> {
           'playlistPath': prefs.getString('PLAYLIST_PATH') ?? '',
           'footballTeams': prefs.getString('FOOTBALL_TEAMS') ?? '',
           'baseballTeams': prefs.getString('BASEBALL_TEAMS') ?? '',
+          'neisKey': prefs.getString('NEIS_API_KEY') ?? '',
+          'schoolName': prefs.getString('SAVED_SCHOOL_NAME') ?? '배재고등학교',
+          'officeCode': prefs.getString('SAVED_OFFICE_CODE') ?? 'B10',
+          'schoolCode': prefs.getString('SAVED_SCHOOL_CODE') ?? '7010156',
         });
 
         final wrongNotes = await LocalStorageService.readWrongNotes();
@@ -684,6 +696,11 @@ class _EVHomePageState extends State<EVHomePage> {
         final ddays = await LocalStorageService.readDdays();
         _sendToReact('ddays_sync_init', {'ddays': ddays});
         _sendToReact('ddays_sync', {'ddays': ddays});
+
+        final schoolInfo = await MealService.getSavedSchoolInfo();
+        if (schoolInfo['schoolCode']?.isNotEmpty == true) {
+          _sendToReact('school_info_sync', schoolInfo);
+        }
 
         final String? cachedImage = await const MethodChannel('com.example.evapp/methods').invokeMethod('getSharedImage');
         if (cachedImage != null) {
@@ -709,9 +726,19 @@ class _EVHomePageState extends State<EVHomePage> {
         final footballTeams = payload['footballTeams'];
         final baseballTeams = payload['baseballTeams'];
         final footballDataKey = payload['footballDataKey'];
-        if (footballTeams != null) await prefs.setString('FOOTBALL_TEAMS', footballTeams);
+        if (footballTeams != null) {
+          await prefs.setString('FOOTBALL_TEAMS', footballTeams);
+          await prefs.setString('SPORTS_TEAM_NAME', footballTeams);
+        }
         if (baseballTeams != null) await prefs.setString('BASEBALL_TEAMS', baseballTeams);
-        if (footballDataKey != null) await prefs.setString('FOOTBALL_DATA_API_KEY', footballDataKey);
+        if (footballDataKey != null) {
+          await prefs.setString('FOOTBALL_DATA_API_KEY', footballDataKey);
+          await prefs.setString('API_FOOTBALL_KEY', footballDataKey);
+        }
+        if ((footballTeams != null && footballTeams.toString().trim().isNotEmpty) ||
+            (baseballTeams != null && baseballTeams.toString().trim().isNotEmpty)) {
+          await prefs.setBool('SPORTS_ACTIVE', true);
+        }
         // 기존 호환용 payload
         final sportType = payload['sportType'];
         final apiKey = payload['apiKey'];
@@ -727,9 +754,12 @@ class _EVHomePageState extends State<EVHomePage> {
         final prefs = await SharedPreferences.getInstance();
         _sendToReact('sports_settings_sync', {
           'sportType': prefs.getString('SPORTS_TYPE') ?? 'football',
-          'apiKey': prefs.getString('API_FOOTBALL_KEY') ?? '',
+          'apiKey': prefs.getString('API_FOOTBALL_KEY') ?? prefs.getString('FOOTBALL_DATA_API_KEY') ?? '',
+          'footballDataKey': prefs.getString('FOOTBALL_DATA_API_KEY') ?? prefs.getString('API_FOOTBALL_KEY') ?? '',
           'firecrawlKey': prefs.getString('FIRECRAWL_API_KEY') ?? '',
           'teamName': prefs.getString('SPORTS_TEAM_NAME') ?? '',
+          'footballTeams': prefs.getString('FOOTBALL_TEAMS') ?? prefs.getString('SPORTS_TEAM_NAME') ?? '',
+          'baseballTeams': prefs.getString('BASEBALL_TEAMS') ?? '',
           'active': prefs.getBool('SPORTS_ACTIVE') ?? false,
         });
       } else if (action == 'get_archives') {
@@ -771,6 +801,46 @@ class _EVHomePageState extends State<EVHomePage> {
         if (ddays != null && ddays is List) {
           final ok = await LocalStorageService.writeDdays(ddays);
           _sendToReact('ddays_sync', {'ddays': ddays, 'success': ok});
+        }
+      } else if (action == 'get_school_info') {
+        final schoolInfo = await MealService.getSavedSchoolInfo();
+        _sendToReact('school_info_sync', schoolInfo);
+      } else if (action == 'save_school_info') {
+        final schoolName = payload['schoolName'] as String? ?? '';
+        final officeCode = payload['officeCode'] as String? ?? '';
+        final schoolCode = payload['schoolCode'] as String? ?? '';
+        await MealService.saveSchoolInfo(
+          schoolName: schoolName,
+          officeCode: officeCode,
+          schoolCode: schoolCode,
+        );
+        _sendToReact('school_info_sync', {
+          'schoolName': schoolName,
+          'officeCode': officeCode,
+          'schoolCode': schoolCode,
+          'success': true,
+        });
+      } else if (action == 'search_school') {
+        final query = payload['query'] as String? ?? '';
+        try {
+          final schools = await MealService.searchSchool(query);
+          _sendToReact('school_search_result', {'schools': schools});
+        } catch (e) {
+          debugPrint('search_school error: $e');
+          _sendToReact('school_search_result', {'schools': []});
+        }
+      } else if (action == 'get_school_meal') {
+        final date = payload['date'] as String? ?? '';
+        final schoolInfo = await MealService.getSavedSchoolInfo();
+        if (schoolInfo['schoolCode']?.isNotEmpty == true && schoolInfo['officeCode']?.isNotEmpty == true) {
+          final mealResult = await MealService.getMeal(
+            officeCode: schoolInfo['officeCode']!,
+            schoolCode: schoolInfo['schoolCode']!,
+            yyyymmdd: date,
+          );
+          _sendToReact('school_meal_result', mealResult);
+        } else {
+          _sendToReact('school_meal_result', {'date': date, 'meals': []});
         }
       } else if (action == 'get_todo') {
         final todoContent = await LocalStorageService.readTodo();
@@ -830,30 +900,55 @@ class _EVHomePageState extends State<EVHomePage> {
         debugPrint('Action: pick_image_for_chat');
         try {
           final picker = ImagePicker();
-          final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+          final pickedFile = await picker.pickImage(
+            source: ImageSource.gallery,
+            maxWidth: 1280,
+            maxHeight: 1280,
+            imageQuality: 85,
+          );
           if (pickedFile != null) {
             final bytes = await pickedFile.readAsBytes();
-            final base64Image = 'data:image/${pickedFile.name.split('.').last};base64,${base64Encode(bytes)}';
+            final ext = pickedFile.name.split('.').last.toLowerCase();
+            final mime = (ext == 'jpg' || ext == 'jpeg') ? 'jpeg' : (ext == 'png' ? 'png' : 'webp');
+            final base64Image = 'data:image/$mime;base64,${base64Encode(bytes)}';
+            debugPrint('pick_image_for_chat success: ${pickedFile.name}, bytes=${bytes.length}, base64Len=${base64Image.length}');
             _sendToReact('chat_image_picked', {
+              'success': true,
               'name': pickedFile.name,
               'base64': base64Image,
+            });
+          } else {
+            _sendToReact('chat_image_picked', {
+              'success': false,
+              'cancelled': true,
             });
           }
         } catch (e) {
           debugPrint('pick_image_for_chat error: $e');
+          _sendToReact('chat_image_picked', {
+            'success': false,
+            'error': e.toString(),
+          });
         }
       } else if (action == 'perform_wrong_ocr') {
         debugPrint('Action: perform_wrong_ocr');
         try {
           final picker = ImagePicker();
-          final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+          final pickedFile = await picker.pickImage(
+            source: ImageSource.gallery,
+            maxWidth: 1280,
+            maxHeight: 1280,
+            imageQuality: 85,
+          );
           if (pickedFile == null) {
             _sendToReact('wrong_ocr_result', {'success': false, 'error': '취소되었습니다.'});
             _sendToReact('wrong_ocr_error', {'message': '취소되었습니다.'});
             return;
           }
           final bytes = await pickedFile.readAsBytes();
-          final base64Image = 'data:image/${pickedFile.name.split('.').last};base64,${base64Encode(bytes)}';
+          final ext = pickedFile.name.split('.').last.toLowerCase();
+          final mime = (ext == 'jpg' || ext == 'jpeg') ? 'jpeg' : (ext == 'png' ? 'png' : 'webp');
+          final base64Image = 'data:image/$mime;base64,${base64Encode(bytes)}';
 
           final processed = await LlmService.processOcrForWrongNoteImage(base64Image);
           if (processed == null) {
@@ -946,6 +1041,7 @@ class _EVHomePageState extends State<EVHomePage> {
       } else if (action == 'save_api_key') {
         final key = payload['key'];
         final visionKey = payload['visionKey'];
+        final searchKey = payload['searchKey'] ?? payload['exaKey'];
         final naverClientId = payload['naverClientId'];
         final naverClientSecret = payload['naverClientSecret'];
         final tavilyKey = payload['tavilyKey'];
@@ -960,11 +1056,14 @@ class _EVHomePageState extends State<EVHomePage> {
         final ttsKey = payload['ttsKey'];
         final ttsEndpoint = payload['ttsEndpoint'];
         final footballDataKey = payload['footballDataKey'];
+        final googleGenAiKey = payload['googleGenAiKey'];
+        final googleGenAiModel = payload['googleGenAiModel'];
         debugPrint('Action: save API keys');
         // Save to SharedPreferences
         final prefs = await SharedPreferences.getInstance();
         if (key != null) await prefs.setString('NVIDIA_NIM_API_KEY', key);
         if (visionKey != null) await prefs.setString('VISION_API_KEY', visionKey);
+        if (searchKey != null) await prefs.setString('EXA_API_KEY', searchKey);
         if (naverClientId != null) await prefs.setString('NAVER_CLIENT_ID', naverClientId);
         if (naverClientSecret != null) await prefs.setString('NAVER_CLIENT_SECRET', naverClientSecret);
         if (tavilyKey != null) await prefs.setString('TAVILY_API_KEY', tavilyKey);
@@ -975,11 +1074,53 @@ class _EVHomePageState extends State<EVHomePage> {
         if (model != null) await prefs.setString('LLM_MODEL', model);
         if (visionModel != null) await prefs.setString('LLM_VISION_MODEL', visionModel);
         if (footballDataKey != null) await prefs.setString('FOOTBALL_DATA_API_KEY', footballDataKey);
+        if (googleGenAiKey != null) await prefs.setString('GOOGLE_GENAI_API_KEY', googleGenAiKey);
+        if (googleGenAiModel != null) await prefs.setString('GOOGLE_GENAI_MODEL', googleGenAiModel);
+        final schoolName = payload['schoolName'];
+        final officeCode = payload['officeCode'];
+        final schoolCode = payload['schoolCode'];
+        final neisKey = payload['neisKey'];
+        if (neisKey != null) await prefs.setString('NEIS_API_KEY', neisKey);
+        if (schoolName != null) await prefs.setString('SAVED_SCHOOL_NAME', schoolName);
+        if (officeCode != null) await prefs.setString('SAVED_OFFICE_CODE', officeCode);
+        if (schoolCode != null) await prefs.setString('SAVED_SCHOOL_CODE', schoolCode);
         if (obsidianPath != null) await prefs.setString('OBSIDIAN_PATH', obsidianPath);
         if (kmaKey != null) await prefs.setString('KMA_API_KEY', kmaKey);
         if (ttsKey != null) await prefs.setString('TTS_API_KEY', ttsKey);
         if (ttsEndpoint != null) await prefs.setString('TTS_ENDPOINT', ttsEndpoint);
         _sendToReact('api_key_saved', {'success': true});
+      } else if (action == 'get_settings' || action == 'get_api_key') {
+        final prefs = await SharedPreferences.getInstance();
+        _sendToReact('settings_sync', {
+          'llmKey': prefs.getString('NVIDIA_NIM_API_KEY') ?? '',
+          'visionKey': prefs.getString('VISION_API_KEY') ?? '',
+          'exaKey': prefs.getString('EXA_API_KEY') ?? '',
+          'naverClientId': prefs.getString('NAVER_CLIENT_ID') ?? '',
+          'naverClientSecret': prefs.getString('NAVER_CLIENT_SECRET') ?? '',
+          'tavilyKey': prefs.getString('TAVILY_API_KEY') ?? '',
+          'firecrawlKey': prefs.getString('FIRECRAWL_API_KEY') ?? '',
+          'visionEnabled': prefs.getBool('VISION_ENABLED') ?? true,
+          'llmEndpoint': prefs.getString('LLM_ENDPOINT') ?? '',
+          'visionEndpoint': prefs.getString('VISION_ENDPOINT') ?? '',
+          'llmModel': prefs.getString('LLM_MODEL') ?? '',
+          'visionModel': prefs.getString('LLM_VISION_MODEL') ?? 'meta/llama-3.2-11b-vision-instruct',
+          'googleGenAiKey': prefs.getString('GOOGLE_GENAI_API_KEY') ?? '',
+          'googleGenAiModel': prefs.getString('GOOGLE_GENAI_MODEL') ?? 'gemini-2.5-flash',
+          'kmaKey': prefs.getString('KMA_API_KEY') ?? '',
+          'ttsKey': prefs.getString('TTS_API_KEY') ?? '',
+          'ttsEndpoint': prefs.getString('TTS_ENDPOINT') ?? '',
+          'footballDataKey': prefs.getString('FOOTBALL_DATA_API_KEY') ?? '',
+          'obsidianVaultPath': prefs.getString('OBSIDIAN_VAULT_PATH') ?? '',
+          'obsidianInboxPath': prefs.getString('OBSIDIAN_INBOX_PATH') ?? prefs.getString('OBSIDIAN_PATH') ?? '',
+          'obsidianPath': prefs.getString('OBSIDIAN_PATH') ?? '',
+          'playlistPath': prefs.getString('PLAYLIST_PATH') ?? '',
+          'footballTeams': prefs.getString('FOOTBALL_TEAMS') ?? '',
+          'baseballTeams': prefs.getString('BASEBALL_TEAMS') ?? '',
+          'neisKey': prefs.getString('NEIS_API_KEY') ?? '',
+          'schoolName': prefs.getString('SAVED_SCHOOL_NAME') ?? '배재고등학교',
+          'officeCode': prefs.getString('SAVED_OFFICE_CODE') ?? 'B10',
+          'schoolCode': prefs.getString('SAVED_SCHOOL_CODE') ?? '7010156',
+        });
       } else if (action == 'save_shared_to_obsidian') {
         debugPrint('Action: save_shared_to_obsidian');
         final title = payload['title'] as String? ?? 'Shared Memo';

@@ -43,12 +43,7 @@ class LocalStorageService {
 ]
 ''';
 
-  static const String defaultScheduleJson = '''
-[
-  {"id": "hakwon_tue_thu", "days": [2, 4], "time": "16:40", "type": "hakwon", "message": "보스, 4시 40분이야. 학원 갈 준비해야지?"},
-  {"id": "dorm_night", "days": [1, 2, 3, 4, 5], "time": "22:30", "type": "dorm", "message": "오늘 하루도 수고했어! 얼른 기숙사 들어가서 쉬자."}
-]
-''';
+  static const String defaultScheduleJson = '[{"id": "hakwon_tue_thu", "days": [2, 4], "time": "16:40", "type": "hakwon", "message": "보스, 4시 40분이야. 학원 갈 준비해야지?"}, {"id": "dorm_night", "days": [1, 2, 3, 4, 5], "time": "22:30", "type": "dorm", "message": "오늘 하루도 수고했어! 얼른 기숙사 들어가서 자자."}]';
 
   /// Returns the directory files should be stored in.
   static Future<Directory> _baseDirectory() async {
@@ -493,7 +488,7 @@ class LocalStorageService {
           await archiveFile.writeAsString(archiveData);
         }
       }
-      return writeConversationHistory([]);
+      return await writeConversationHistory([]);
     } catch (e) {
       debugPrint('LocalStorageService.clearConversationHistory error: $e');
       return false;
@@ -609,7 +604,7 @@ class LocalStorageService {
                   ),
                 ))
             .toList();
-        return writeConversationHistory(history);
+        return await writeConversationHistory(history);
       }
       return false;
     } catch (e) {

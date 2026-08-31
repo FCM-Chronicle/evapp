@@ -1062,7 +1062,7 @@ function Switch({ on, onChange }) {
 /* ------------------------------------------------------------------ */
 /* 상단 상태바 (StatusBar)                                            */
 /* ------------------------------------------------------------------ */
-function StatusBar({ onMenu, showBack, onBack, title, darkText = false, pinnedDday, onDdayClick }) {
+function StatusBar({ onMenu, showBack, onBack, title, darkText = false, pinnedDday, onDdayClick, pinnedTodo, onTodoClick }) {
     return (
         <div
             className="flex items-center justify-between px-4 py-2.5 border-b select-none z-20"
@@ -1099,7 +1099,26 @@ function StatusBar({ onMenu, showBack, onBack, title, darkText = false, pinnedDd
                 )}
             </div>
             {!showBack && (
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
+                    {pinnedTodo && (
+                        <button
+                            onClick={onTodoClick}
+                            className="flex items-center gap-1.5 px-2 py-0.5 hud-cut-corner-sm transition-all max-w-[110px] sm:max-w-[150px]"
+                            style={{
+                                border: `1px solid ${C.lime}`,
+                                background: "rgba(5,10,20,0.7)",
+                                boxShadow: `0 0 8px ${C.lime}33`,
+                            }}
+                        >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: C.lime }} />
+                            <span style={{ ...orbitron, color: C.lime, fontSize: 9.5, fontWeight: 700 }}>
+                                [TODO]
+                            </span>
+                            <span className="truncate" style={{ ...sans, color: C.textBright, fontSize: 11 }}>
+                                {pinnedTodo.text}
+                            </span>
+                        </button>
+                    )}
                     {pinnedDday && (
                         <button
                             onClick={onDdayClick}
@@ -1114,12 +1133,12 @@ function StatusBar({ onMenu, showBack, onBack, title, darkText = false, pinnedDd
                             <span style={{ ...orbitron, color: pinnedDday.color || C.accent, fontSize: 10, fontWeight: 700 }}>
                                 {pinnedDday.dInfo?.text || "D-DAY"}
                             </span>
-                            <span className="truncate max-w-[80px]" style={{ ...sans, color: C.textBright, fontSize: 11 }}>
+                            <span className="truncate max-w-[70px]" style={{ ...sans, color: C.textBright, fontSize: 11 }}>
                                 {pinnedDday.title}
                             </span>
                         </button>
                     )}
-                    <span style={{ ...mono, color: C.slate, fontSize: 9.5, letterSpacing: 1 }} className="hidden sm:inline">
+                    <span style={{ ...mono, color: C.slate, fontSize: 9.5, letterSpacing: 1 }} className="hidden md:inline">
                         CORE_v2.4
                     </span>
                     <button onClick={onMenu} style={{ color: C.cyan }} className="p-1 hover:text-cyan-300 transition-colors">
@@ -1484,18 +1503,28 @@ function MainScreen({
     llmResultEvent,
     conversationHistoryEvent,
     attachedFileFromNative,
+    onClearAttachedFile,
     searchEngineStatusFromParent,
     pinnedDday,
     onDdayClick,
+    pinnedTodo,
+    onTodoClick,
 }) {
     const [input, setInput] = useState("");
     const [attachedFile, setAttachedFile] = useState(null);
     const [log, setLog] = useState([]);
     const [searchEngineStatus, setSearchEngineStatus] = useState(null);
 
+    const clearFile = () => {
+        setAttachedFile(null);
+        if (onClearAttachedFile) onClearAttachedFile();
+    };
+
     useEffect(() => {
         if (attachedFileFromNative) {
             setAttachedFile(attachedFileFromNative);
+        } else {
+            setAttachedFile(null);
         }
     }, [attachedFileFromNative]);
 
@@ -1591,6 +1620,29 @@ function MainScreen({
     useEffect(() => {
         if (!llmResultEvent) return;
         const { id, text } = llmResultEvent;
+        
+        const trimmed = (text || "").trim();
+        if (trimmed === "music_start" || trimmed.includes("<resume_music>")) {
+            onMusicOn();
+            const cleaned = trimmed.replace("<resume_music>", "").trim();
+            if (cleaned !== "music_start" && cleaned !== "") {
+                streamText(id, cleaned);
+            } else {
+                setLog((prev) => prev.map((e) => (e.id === id ? { ...e, assistant: "음악을 재생합니다.", streaming: false } : e)));
+            }
+            return;
+        }
+        if (trimmed === "music_off" || trimmed.includes("<pause_music>")) {
+            onMusicOff();
+            const cleaned = trimmed.replace("<pause_music>", "").trim();
+            if (cleaned !== "music_off" && cleaned !== "") {
+                streamText(id, cleaned);
+            } else {
+                setLog((prev) => prev.map((e) => (e.id === id ? { ...e, assistant: "음악을 정지합니다.", streaming: false } : e)));
+            }
+            return;
+        }
+
         streamText(id, text);
     }, [llmResultEvent]);
 
@@ -1615,11 +1667,17 @@ function MainScreen({
         const id = `turn_${Date.now()}`;
         idxRef.current += 1;
 
+        let finalText = text;
+        if (attachedFile?.text) {
+            finalText = `[첨부 문서: ${attachedFile.name}]\n${attachedFile.text}\n\n${text}`.trim();
+        }
+
         sendToFlutter("send_message", {
             id,
-            text,
+            text: finalText,
             source: inputSourceRef.current,
             attachedFile: attachedFile ? { name: attachedFile.name, base64: attachedFile.base64 } : null,
+            attachmentBase64: attachedFile?.base64 || null,
         });
         inputSourceRef.current = "text";
 
@@ -1631,7 +1689,7 @@ function MainScreen({
                 { id, user: text, kind: "search", phase: "searching", assistant: "", streaming: true },
             ]);
             setInput("");
-            setAttachedFile(null);
+            clearFile();
             setTimeout(() => {
                 streamText(id, `[검색 완료] '${query}' 관련 분석 결과입니다.`);
             }, 1600);
@@ -1640,10 +1698,10 @@ function MainScreen({
 
         setLog((prev) => [
             ...prev,
-            { id, user: text, kind: "chat", assistant: "", streaming: true, attachment: attachedFile },
+            { id, user: text || (attachedFile ? `[첨부: ${attachedFile.name}]` : ""), kind: "chat", assistant: "", streaming: true, attachment: attachedFile },
         ]);
         setInput("");
-        setAttachedFile(null);
+        clearFile();
     };
 
     const handlePaste = (e) => {
@@ -1710,7 +1768,13 @@ function MainScreen({
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
         >
-            <StatusBar onMenu={onMenu} pinnedDday={pinnedDday} onDdayClick={onDdayClick} />
+            <StatusBar
+                onMenu={onMenu}
+                pinnedDday={pinnedDday}
+                onDdayClick={onDdayClick}
+                pinnedTodo={pinnedTodo}
+                onTodoClick={onTodoClick}
+            />
 
             {/* 메인 스크롤 영역 */}
             <div className="flex-1 overflow-y-auto">
@@ -1757,7 +1821,19 @@ function MainScreen({
                     {older.map((entry) => (
                         <div key={entry.id} className="w-full flex flex-col items-center gap-2" style={{ opacity: 0.55 }}>
                             {entry.user && (
-                                <div className="self-end mr-3 px-3 py-1.5 hud-cut-corner-sm" style={{ background: "rgba(63,169,245,0.12)", border: `1px solid ${C.cyan}` }}>
+                                <div className="self-end mr-3 px-3 py-1.5 hud-cut-corner-sm flex flex-col gap-1" style={{ background: "rgba(63,169,245,0.12)", border: `1px solid ${C.cyan}` }}>
+                                    {entry.attachment && (
+                                        <div className="flex items-center gap-1.5 pb-1 border-b border-cyan-400/20">
+                                            {entry.attachment.base64 && entry.attachment.base64.startsWith("data:image") ? (
+                                                <img src={entry.attachment.base64} alt="attached" className="w-12 h-12 object-cover rounded border border-cyan-400/30" />
+                                            ) : (
+                                                <Paperclip size={12} color={C.cyanLight} />
+                                            )}
+                                            <span style={{ ...mono, fontSize: 10.5, color: C.cyanLight }} className="truncate max-w-[160px]">
+                                                {entry.attachment.name}
+                                            </span>
+                                        </div>
+                                    )}
                                     <span style={{ ...sans, color: C.cyanLight, fontSize: 12.5 }}>{entry.user}</span>
                                 </div>
                             )}
@@ -1794,7 +1870,19 @@ function MainScreen({
                     {latest && (
                         <div ref={latestRef} className="w-full flex flex-col items-center gap-4">
                             {latest.user && (
-                                <div className="self-end mr-3 px-3.5 py-2 hud-cut-corner" style={{ background: "rgba(63,169,245,0.18)", border: `1px solid ${C.cyanLight}`, boxShadow: `0 0 12px rgba(63,169,245,0.3)` }}>
+                                <div className="self-end mr-3 px-3.5 py-2 hud-cut-corner flex flex-col gap-1.5" style={{ background: "rgba(63,169,245,0.18)", border: `1px solid ${C.cyanLight}`, boxShadow: `0 0 12px rgba(63,169,245,0.3)` }}>
+                                    {latest.attachment && (
+                                        <div className="flex items-center gap-2 pb-1.5 border-b border-cyan-400/25">
+                                            {latest.attachment.base64 && latest.attachment.base64.startsWith("data:image") ? (
+                                                <img src={latest.attachment.base64} alt="attached" className="w-16 h-16 object-cover rounded border border-cyan-400/40" />
+                                            ) : (
+                                                <Paperclip size={14} color={C.cyanLight} />
+                                            )}
+                                            <span style={{ ...mono, fontSize: 11, color: C.cyanLight }} className="truncate max-w-[200px]">
+                                                {latest.attachment.name}
+                                            </span>
+                                        </div>
+                                    )}
                                     <span style={{ ...sans, color: C.textBright, fontSize: 13.5, fontWeight: 500 }}>{latest.user}</span>
                                 </div>
                             )}
@@ -1835,17 +1923,37 @@ function MainScreen({
                 </div>
             </div>
 
-            {/* 첨부파일 태그 */}
+            {/* 첨부파일 태그 / 프리뷰 */}
             <AnimatePresence>
                 {attachedFile && (
-                    <motion.div className="px-6 pb-2" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}>
-                        <div className="inline-flex items-center gap-2 px-3 py-1.5 hud-cut-corner-sm" style={{ border: `1px solid ${C.cyan}`, background: "rgba(10,20,40,0.85)" }}>
-                            <Paperclip size={12} color={C.cyan} />
-                            <span style={{ ...mono, color: C.text, fontSize: 11 }} className="truncate max-w-[200px]">
-                                {attachedFile.name}
-                            </span>
-                            <button onClick={() => setAttachedFile(null)} style={{ color: C.slate }} className="hover:text-white">
-                                <X size={12} />
+                    <motion.div className="px-6 pb-2" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}>
+                        <div
+                            className="inline-flex items-center gap-2.5 px-3.5 py-2 hud-cut-corner-sm"
+                            style={{
+                                border: `1.5px solid ${C.cyan}`,
+                                background: "rgba(10,24,48,0.92)",
+                                boxShadow: "0 0 14px rgba(63,169,245,0.4)"
+                            }}
+                        >
+                            {attachedFile.base64 && attachedFile.base64.startsWith("data:image") ? (
+                                <img
+                                    src={attachedFile.base64}
+                                    alt="preview"
+                                    className="w-8 h-8 object-cover rounded border border-cyan-400/50 flex-shrink-0"
+                                />
+                            ) : (
+                                <Paperclip size={16} color={C.cyanLight} className="flex-shrink-0" />
+                            )}
+                            <div className="flex flex-col min-w-0">
+                                <span style={{ ...mono, color: C.textBright, fontSize: 11.5, fontWeight: 600 }} className="truncate max-w-[220px]">
+                                    {attachedFile.name}
+                                </span>
+                                <span style={{ ...orbitron, color: C.lime, fontSize: 8.5, letterSpacing: 0.5 }}>
+                                    ✓ ATTACHED // 준비 완료
+                                </span>
+                            </div>
+                            <button onClick={clearFile} style={{ color: C.slate }} className="hover:text-white ml-1.5 p-0.5" title="첨부 취소">
+                                <X size={14} />
                             </button>
                         </div>
                     </motion.div>
@@ -1917,15 +2025,24 @@ function MainScreen({
 
                     {/* 중앙 텍스트 입력 */}
                     <input
+                        type="text"
                         value={input}
                         onChange={(e) => {
                             inputSourceRef.current = "text";
                             setInput(e.target.value);
                         }}
-                        onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.nativeEvent.isComposing && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
                         onPaste={handlePaste}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck="false"
                         placeholder={micActive ? "Listening to your voice..." : "Ask E.V... (mic muted)"}
-                        className="flex-1 bg-transparent outline-none px-2 text-center"
+                        className="flex-1 bg-transparent outline-none px-2 text-left"
                         style={{
                             ...sans,
                             color: C.textBright,
@@ -1999,6 +2116,15 @@ function MainScreen({
 /* ------------------------------------------------------------------ */
 /* 화면 2-1: API 키 및 모델 설정                                       */
 /* ------------------------------------------------------------------ */
+function ApiKeySection({ title, tone = C.cyan, scale = 1, children }) {
+    return (
+        <div className="flex flex-col gap-3 p-4 mb-4 hud-cut-corner hud-glass-panel" style={{ borderColor: C.panelBorder }}>
+            <span style={{ ...orbitron, color: tone, fontSize: 11 * scale, letterSpacing: 1 }}>[ {title} ]</span>
+            {children}
+        </div>
+    );
+}
+
 function ApiKeyScreen({ onBack }) {
     const { scale } = useResponsiveLayout();
     const [key, setKey] = useState(() => localStorage.getItem("LLM_KEY") || "");
@@ -2015,22 +2141,41 @@ function ApiKeyScreen({ onBack }) {
     const [tavilyKey, setTavilyKey] = useState(() => localStorage.getItem("TAVILY_KEY") || "");
     const [firecrawlKey, setFirecrawlKey] = useState(() => localStorage.getItem("FIRECRAWL_KEY") || "");
     const [footballDataKey, setFootballDataKey] = useState(() => localStorage.getItem("FOOTBALL_DATA_KEY") || "");
+    const [googleGenAiKey, setGoogleGenAiKey] = useState(() => localStorage.getItem("GOOGLE_GENAI_API_KEY") || "");
+    const [googleGenAiModel, setGoogleGenAiModel] = useState(() => localStorage.getItem("GOOGLE_GENAI_MODEL") || "gemini-2.0-flash");
+    const [schoolName, setSchoolName] = useState(() => localStorage.getItem("SAVED_SCHOOL_NAME") || "배재고등학교");
+    const [officeCode, setOfficeCode] = useState(() => localStorage.getItem("SAVED_OFFICE_CODE") || "B10");
+    const [schoolCode, setSchoolCode] = useState(() => localStorage.getItem("SAVED_SCHOOL_CODE") || "7010156");
+    const [neisKey, setNeisKey] = useState(() => localStorage.getItem("NEIS_API_KEY") || "");
 
     useEffect(() => {
         const handleSettingsSync = (e) => {
             const payload = e.detail;
             if (payload?.type === "settings_sync") {
-                if (payload.llmKey !== undefined) setKey(payload.llmKey);
-                if (payload.visionKey !== undefined) setVisionKey(payload.visionKey);
-                if (payload.exaKey !== undefined) setSearchKey(payload.exaKey);
-                if (payload.kmaKey !== undefined) setKmaKey(payload.kmaKey);
-                if (payload.llmEndpoint !== undefined) setEndpoint(payload.llmEndpoint);
-                if (payload.visionEndpoint !== undefined) setVisionEndpoint(payload.visionEndpoint);
-                if (payload.llmModel !== undefined) setModel(payload.llmModel);
-                if (payload.visionModel !== undefined) setVisionModel(payload.visionModel);
+                if (payload.llmKey !== undefined) { setKey(payload.llmKey); localStorage.setItem("LLM_KEY", payload.llmKey); }
+                if (payload.visionKey !== undefined) { setVisionKey(payload.visionKey); localStorage.setItem("VISION_KEY", payload.visionKey); }
+                if (payload.exaKey !== undefined) { setSearchKey(payload.exaKey); localStorage.setItem("EXA_KEY", payload.exaKey); }
+                if (payload.kmaKey !== undefined) { setKmaKey(payload.kmaKey); localStorage.setItem("KMA_API_KEY", payload.kmaKey); }
+                if (payload.llmEndpoint !== undefined) { setEndpoint(payload.llmEndpoint); localStorage.setItem("LLM_ENDPOINT", payload.llmEndpoint); }
+                if (payload.visionEndpoint !== undefined) { setVisionEndpoint(payload.visionEndpoint); localStorage.setItem("VISION_ENDPOINT", payload.visionEndpoint); }
+                if (payload.llmModel !== undefined) { setModel(payload.llmModel); localStorage.setItem("LLM_MODEL", payload.llmModel); }
+                if (payload.visionModel !== undefined) { setVisionModel(payload.visionModel); localStorage.setItem("LLM_VISION_MODEL", payload.visionModel); }
+                if (payload.visionEnabled !== undefined) { setVisionEnabled(payload.visionEnabled); localStorage.setItem("VISION_ENABLED", String(payload.visionEnabled)); }
+                if (payload.naverClientId !== undefined) { setNaverClientId(payload.naverClientId); localStorage.setItem("NAVER_CLIENT_ID", payload.naverClientId); }
+                if (payload.naverClientSecret !== undefined) { setNaverClientSecret(payload.naverClientSecret); localStorage.setItem("NAVER_CLIENT_SECRET", payload.naverClientSecret); }
+                if (payload.tavilyKey !== undefined) { setTavilyKey(payload.tavilyKey); localStorage.setItem("TAVILY_KEY", payload.tavilyKey); }
+                if (payload.firecrawlKey !== undefined) { setFirecrawlKey(payload.firecrawlKey); localStorage.setItem("FIRECRAWL_KEY", payload.firecrawlKey); }
+                if (payload.footballDataKey !== undefined) { setFootballDataKey(payload.footballDataKey); localStorage.setItem("FOOTBALL_DATA_KEY", payload.footballDataKey); }
+                if (payload.googleGenAiKey !== undefined) { setGoogleGenAiKey(payload.googleGenAiKey); localStorage.setItem("GOOGLE_GENAI_API_KEY", payload.googleGenAiKey); }
+                if (payload.googleGenAiModel !== undefined) { setGoogleGenAiModel(payload.googleGenAiModel); localStorage.setItem("GOOGLE_GENAI_MODEL", payload.googleGenAiModel); }
+                if (payload.neisKey !== undefined) { setNeisKey(payload.neisKey); localStorage.setItem("NEIS_API_KEY", payload.neisKey); }
+                if (payload.schoolName !== undefined) { setSchoolName(payload.schoolName); localStorage.setItem("SAVED_SCHOOL_NAME", payload.schoolName); }
+                if (payload.officeCode !== undefined) { setOfficeCode(payload.officeCode); localStorage.setItem("SAVED_OFFICE_CODE", payload.officeCode); }
+                if (payload.schoolCode !== undefined) { setSchoolCode(payload.schoolCode); localStorage.setItem("SAVED_SCHOOL_CODE", payload.schoolCode); }
             }
         };
         window.addEventListener("ev-native-event", handleSettingsSync);
+        sendToFlutter("get_settings", {});
         return () => window.removeEventListener("ev-native-event", handleSettingsSync);
     }, []);
 
@@ -2049,26 +2194,29 @@ function ApiKeyScreen({ onBack }) {
         localStorage.setItem("TAVILY_KEY", tavilyKey);
         localStorage.setItem("FIRECRAWL_KEY", firecrawlKey);
         localStorage.setItem("FOOTBALL_DATA_KEY", footballDataKey);
+        localStorage.setItem("GOOGLE_GENAI_API_KEY", googleGenAiKey);
+        localStorage.setItem("GOOGLE_GENAI_MODEL", googleGenAiModel);
+        localStorage.setItem("SAVED_SCHOOL_NAME", schoolName);
+        localStorage.setItem("SAVED_OFFICE_CODE", officeCode);
+        localStorage.setItem("SAVED_SCHOOL_CODE", schoolCode);
+        localStorage.setItem("NEIS_API_KEY", neisKey);
         sendToFlutter("save_api_key", {
             key, visionKey, searchKey, kmaKey, endpoint, visionEndpoint, model, visionModel,
             naverClientId, naverClientSecret, tavilyKey, firecrawlKey,
-            visionEnabled, footballDataKey,
+            visionEnabled, footballDataKey, googleGenAiKey, googleGenAiModel,
+            schoolName, officeCode, schoolCode, neisKey
+        });
+        sendToFlutter("save_school_info", {
+            schoolName, officeCode, schoolCode
         });
         alert("시스템 설정이 저장되었습니다.");
     };
-
-    const Section = ({ title, tone = C.cyan, children }) => (
-        <div className="flex flex-col gap-3 p-4 mb-4 hud-cut-corner hud-glass-panel" style={{ borderColor: C.panelBorder }}>
-            <span style={{ ...orbitron, color: tone, fontSize: 11 * scale, letterSpacing: 1 }}>[ {title} ]</span>
-            {children}
-        </div>
-    );
 
     return (
         <div className="flex flex-col h-full overflow-y-auto">
             <StatusBar showBack onBack={onBack} title="API & MODEL MATRIX" />
             <div className="flex-1 px-4 py-5 flex flex-col">
-                <Section title="MAIN TEXT MODEL (대화 & 분석)" tone={C.cyanLight}>
+                <ApiKeySection title="MAIN TEXT MODEL (대화 & 분석)" tone={C.cyanLight} scale={scale}>
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>LLM API KEY</span>
                     <input
                         value={key} onChange={(e) => setKey(e.target.value)} placeholder="API Key (예: nvapi-...)"
@@ -2088,9 +2236,9 @@ function ApiKeyScreen({ onBack }) {
                         className="w-full bg-transparent outline-none hud-cut-corner-sm"
                         style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
                     />
-                </Section>
+                </ApiKeySection>
 
-                <Section title="VISION AI MODEL (이미지 분석 & OCR)" tone={C.lime}>
+                <ApiKeySection title="VISION AI MODEL (이미지 분석 & OCR)" tone={C.lime} scale={scale}>
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>VISION API KEY (미입력 시 기본 LLM KEY 사용)</span>
                     <input
                         value={visionKey} onChange={(e) => setVisionKey(e.target.value)} placeholder="Vision 전용 API Key (선택 사항)"
@@ -2113,22 +2261,39 @@ function ApiKeyScreen({ onBack }) {
                     <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: `1px solid ${C.panelBorder}` }}>
                         <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>AI VISION PIPELINE</span>
                         <button
-                            type="button"
                             onClick={() => setVisionEnabled(!visionEnabled)}
-                            className="px-3 py-1 hud-cut-corner-sm"
+                            className="px-2 py-1 rounded transition-colors"
                             style={{
-                                border: `1px solid ${visionEnabled ? C.lime : C.slate}`,
-                                color: visionEnabled ? C.lime : C.slate,
                                 ...mono,
                                 fontSize: 10 * scale,
+                                background: visionEnabled ? `${C.lime}33` : `${C.slate}33`,
+                                color: visionEnabled ? C.lime : C.slate,
+                                border: `1px solid ${visionEnabled ? C.lime : C.panelBorder}`
                             }}
                         >
-                            {visionEnabled ? "ENABLED // ON" : "DISABLED // OFF"}
+                            {visionEnabled ? "ENABLED" : "DISABLED"}
                         </button>
                     </div>
-                </Section>
+                </ApiKeySection>
 
-                <Section title="WEB SEARCH & CRAWLER" tone={C.cyan}>
+                <ApiKeySection title="YOUTUBE & GOOGLE GENAI (순정 SDK)" tone={C.cyan} scale={scale}>
+                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>GOOGLE GENAI API KEY</span>
+                    <input
+                        value={googleGenAiKey} onChange={(e) => setGoogleGenAiKey(e.target.value)} placeholder="API Key (예: AIzaSy...)"
+                        type="password"
+                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
+                        style={{ ...mono, color: C.cyan, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                    />
+                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>GENAI MODEL (추천: gemini-3.7-flash, gemini-3.5-flash, gemini-3-flash-preview)</span>
+                    <input
+                        value={googleGenAiModel} onChange={(e) => setGoogleGenAiModel(e.target.value)} placeholder="gemini-3.7-flash"
+                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
+                        style={{ ...mono, color: C.cyan, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                    />
+                </ApiKeySection>
+
+
+                <ApiKeySection title="WEB SEARCH & CRAWLER" tone={C.cyan} scale={scale}>
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>NAVER CLIENT ID</span>
                     <input
                         value={naverClientId} onChange={(e) => setNaverClientId(e.target.value)} placeholder="Naver Client ID..."
@@ -2163,9 +2328,9 @@ function ApiKeyScreen({ onBack }) {
                         className="w-full bg-transparent outline-none hud-cut-corner-sm"
                         style={{ ...mono, color: C.coral, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
                     />
-                </Section>
+                </ApiKeySection>
 
-                <Section title="WEATHER SERVICE" tone={C.lime}>
+                <ApiKeySection title="WEATHER SERVICE" tone={C.lime} scale={scale}>
                     <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>KMA WEATHER API KEY</span>
                     <input
                         type="password"
@@ -2173,7 +2338,35 @@ function ApiKeyScreen({ onBack }) {
                         className="w-full bg-transparent outline-none hud-cut-corner-sm"
                         style={{ ...mono, color: C.lime, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
                     />
-                </Section>
+                </ApiKeySection>
+
+                <ApiKeySection title="SCHOOL MEAL SETTINGS (NEIS)" tone={C.cyan} scale={scale}>
+                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>학교 이름 (기본: 배재고등학교)</span>
+                    <input
+                        value={schoolName} onChange={(e) => setSchoolName(e.target.value)} placeholder="배재고등학교"
+                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
+                        style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                    />
+                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>시도교육청 코드 (기본: B10 - 서울특별시교육청)</span>
+                    <input
+                        value={officeCode} onChange={(e) => setOfficeCode(e.target.value)} placeholder="B10"
+                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
+                        style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                    />
+                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>표준학교 코드 (기본: 7010156 - 배재고)</span>
+                    <input
+                        value={schoolCode} onChange={(e) => setSchoolCode(e.target.value)} placeholder="7010156"
+                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
+                        style={{ ...mono, color: C.lime, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                    />
+                    <span style={{ ...mono, color: C.slate, fontSize: 10 * scale }}>NEIS 오픈 API 인증키 (선택 사항: 일일 호출 한도 증설용)</span>
+                    <input
+                        type="password"
+                        value={neisKey} onChange={(e) => setNeisKey(e.target.value)} placeholder="NEIS API Key (미입력 시 기본 호출)..."
+                        className="w-full bg-transparent outline-none hud-cut-corner-sm"
+                        style={{ ...mono, color: C.cyanLight, fontSize: 12 * scale, padding: `${8 * scale}px`, border: `1px solid ${C.panelBorder}` }}
+                    />
+                </ApiKeySection>
 
                 <button
                     onClick={handleSave}
@@ -2278,9 +2471,11 @@ function SportsSettingsScreen({ onBack }) {
             if (payload?.type === "sports_settings_sync") {
                 if (payload.footballTeams) setFootballTeams(payload.footballTeams);
                 if (payload.baseballTeams) setBaseballTeams(payload.baseballTeams);
+                if (payload.footballDataKey) setFootballDataKey(payload.footballDataKey);
             }
         };
         window.addEventListener("ev-native-event", handleNativeEvent);
+        sendToFlutter("get_sports_settings", {});
         return () => window.removeEventListener("ev-native-event", handleNativeEvent);
     }, []);
 
@@ -2547,7 +2742,7 @@ function PathSettingsScreen({ onBack }) {
 /* ------------------------------------------------------------------ */
 /* 화면 2-1-F: 오늘의 할 일 (Todo)                                     */
 /* ------------------------------------------------------------------ */
-function TodoScreen({ onBack, items, content }) {
+function TodoScreen({ onBack, items, content, pinnedTodoText, onPinTodo }) {
     const { scale } = useResponsiveLayout();
     const [viewMode, setViewMode] = useState("list");
     const [newTodoText, setNewTodoText] = useState("");
@@ -2563,7 +2758,7 @@ function TodoScreen({ onBack, items, content }) {
 
     const todoList = items || [];
     const totalCount = todoList.length;
-    const completedCount = todoList.filter((t) => t.completed).length;
+    const completedCount = todoList.filter((t) => t.completed || t.done).length;
     const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
     const handleAdd = () => {
@@ -2661,51 +2856,67 @@ function TodoScreen({ onBack, items, content }) {
                         </div>
                     ) : (
                         <div className="flex flex-col gap-2">
-                            {todoList.map((item, idx) => (
-                                <motion.div
-                                    key={item.id || idx}
-                                    initial={{ opacity: 0, y: 4 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    className="flex items-center justify-between p-3 hud-cut-corner-sm hud-glass-panel"
-                                    style={{
-                                        borderColor: item.completed ? "rgba(0,245,160,0.35)" : C.panelBorder,
-                                    }}
-                                >
-                                    <button
-                                        onClick={() => handleToggle(idx)}
-                                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                            {todoList.map((item, idx) => {
+                                const isDone = item.completed || item.done;
+                                const isPinned = pinnedTodoText === item.text;
+                                return (
+                                    <motion.div
+                                        key={item.id || idx}
+                                        initial={{ opacity: 0, y: 4 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        className="flex items-center justify-between p-3 hud-cut-corner-sm hud-glass-panel"
+                                        style={{
+                                            borderColor: isPinned ? C.lime : isDone ? "rgba(0,245,160,0.35)" : C.panelBorder,
+                                        }}
                                     >
-                                        <div
-                                            className="flex items-center justify-center rounded-sm flex-shrink-0"
-                                            style={{
-                                                width: 18 * scale,
-                                                height: 18 * scale,
-                                                border: `1.5px solid ${item.completed ? C.lime : C.slate}`,
-                                                background: item.completed ? C.lime : "transparent",
-                                            }}
+                                        <button
+                                            onClick={() => handleToggle(idx)}
+                                            className="flex items-center gap-3 flex-1 min-w-0 text-left"
                                         >
-                                            {item.completed && <Check size={12 * scale} color="#050710" strokeWidth={3} />}
+                                            <div
+                                                className="flex items-center justify-center rounded-sm flex-shrink-0"
+                                                style={{
+                                                    width: 18 * scale,
+                                                    height: 18 * scale,
+                                                    border: `1.5px solid ${isDone ? C.lime : C.slate}`,
+                                                    background: isDone ? C.lime : "transparent",
+                                                }}
+                                            >
+                                                {isDone && <Check size={12 * scale} color="#050710" strokeWidth={3} />}
+                                            </div>
+                                            <span
+                                                className="truncate"
+                                                style={{
+                                                    ...sans,
+                                                    fontSize: 13.5 * scale,
+                                                    color: isDone ? C.slate : C.textBright,
+                                                    textDecoration: isDone ? "line-through" : "none",
+                                                }}
+                                            >
+                                                {item.text}
+                                            </span>
+                                        </button>
+                                        <div className="flex items-center gap-1">
+                                            {onPinTodo && (
+                                                <button
+                                                    onClick={() => onPinTodo(isPinned ? null : item.text)}
+                                                    className="p-1.5 transition-colors"
+                                                    style={{ color: isPinned ? C.lime : C.slate }}
+                                                    title="상단 상태바에 고정"
+                                                >
+                                                    <Pin size={14 * scale} />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleDelete(idx)}
+                                                className="p-1.5 text-slate-500 hover:text-red-400"
+                                            >
+                                                <Trash2 size={14 * scale} />
+                                            </button>
                                         </div>
-                                        <span
-                                            className="truncate"
-                                            style={{
-                                                ...sans,
-                                                fontSize: 13.5 * scale,
-                                                color: item.completed ? C.slate : C.textBright,
-                                                textDecoration: item.completed ? "line-through" : "none",
-                                            }}
-                                        >
-                                            {item.text}
-                                        </span>
-                                    </button>
-                                    <button
-                                        onClick={() => handleDelete(idx)}
-                                        className="p-1.5 text-slate-500 hover:text-red-400"
-                                    >
-                                        <Trash2 size={14 * scale} />
-                                    </button>
-                                </motion.div>
-                            ))}
+                                    </motion.div>
+                                );
+                            })}
                         </div>
                     )}
                 </div>
@@ -4466,6 +4677,7 @@ export default function EVApp() {
     const [attachedFile, setAttachedFile] = useState(null);
     const [ddays, setDdays] = useState([]);
     const [schoolInfo, setSchoolInfo] = useState(null);
+    const [pinnedTodoText, setPinnedTodoText] = useState(() => localStorage.getItem("PINNED_TODO_TEXT") || "");
     const { maxWidth } = useResponsiveLayout();
 
     const pinnedDday = useMemo(() => {
@@ -4478,6 +4690,16 @@ export default function EVApp() {
             dInfo: calculateDDay(target.targetDate),
         };
     }, [ddays]);
+
+    const pinnedTodo = useMemo(() => {
+        if (!todoItems || todoItems.length === 0) return null;
+        if (pinnedTodoText) {
+            const found = todoItems.find((t) => t.text === pinnedTodoText && !(t.completed || t.done));
+            if (found) return found;
+        }
+        const firstUndone = todoItems.find((t) => !(t.completed || t.done));
+        return firstUndone || null;
+    }, [todoItems, pinnedTodoText]);
 
     useEffect(() => {
         let attempts = 0;
@@ -4669,9 +4891,58 @@ export default function EVApp() {
                 case "conversation_sync_init":
                     setConversationHistoryEvent({ history: payload.history || [] });
                     break;
+                case "chat_image_picked":
+                    if (payload.success === false) {
+                        if (payload.error) {
+                            triggerToast({
+                                eyebrow: "IMAGE ATTACH",
+                                message: `이미지 첨부 실패: ${payload.error}`,
+                                icon: ImageIcon,
+                                color: C.coral,
+                            });
+                            triggerAlert("error");
+                        }
+                    } else if (payload.name && payload.base64) {
+                        setAttachedFile({
+                            name: payload.name,
+                            base64: payload.base64,
+                            type: "image",
+                        });
+                        triggerToast({
+                            eyebrow: "IMAGE ATTACHED",
+                            message: `사진 첨부 완료: ${payload.name}`,
+                            icon: ImageIcon,
+                            color: C.lime,
+                        });
+                        triggerAlert("done");
+                    }
+                    break;
                 case "file_picked":
-                    if (payload.name && payload.base64) {
-                        setAttachedFile({ name: payload.name, base64: payload.base64 });
+                    if (payload.success === false) {
+                        if (payload.error && payload.error !== "No file selected") {
+                            triggerToast({
+                                eyebrow: "FILE ATTACH",
+                                message: `파일 선택 실패: ${payload.error}`,
+                                icon: Paperclip,
+                                color: C.coral,
+                            });
+                            triggerAlert("error");
+                        }
+                    } else {
+                        const fileName = payload.name || payload.filename || "문서 파일";
+                        setAttachedFile({
+                            name: fileName,
+                            text: payload.text || "",
+                            base64: payload.base64 || null,
+                            type: "document",
+                        });
+                        triggerToast({
+                            eyebrow: "FILE ATTACHED",
+                            message: `문서 첨부 완료: ${fileName}`,
+                            icon: Paperclip,
+                            color: C.lime,
+                        });
+                        triggerAlert("done");
                     }
                     break;
                 case "voice_input":
@@ -4735,6 +5006,8 @@ export default function EVApp() {
                         <MainScreen
                             pinnedDday={pinnedDday}
                             onDdayClick={() => goto("dday")}
+                            pinnedTodo={pinnedTodo}
+                            onTodoClick={() => goto("todo")}
 
                             onMenu={() => setMenuOpen(true)}
                             menuOpen={menuOpen}
@@ -4759,6 +5032,7 @@ export default function EVApp() {
                             llmResultEvent={llmResultEvent}
                             conversationHistoryEvent={conversationHistoryEvent}
                             attachedFileFromNative={attachedFile}
+                            onClearAttachedFile={() => setAttachedFile(null)}
                             searchEngineStatusFromParent={searchEngineStatus}
                         />
                     )}
@@ -4768,6 +5042,12 @@ export default function EVApp() {
                             onBack={() => goto("main")}
                             items={todoItems}
                             content={todoContent}
+                            pinnedTodoText={pinnedTodoText}
+                            onPinTodo={(text) => {
+                                setPinnedTodoText(text || "");
+                                if (text) localStorage.setItem("PINNED_TODO_TEXT", text);
+                                else localStorage.removeItem("PINNED_TODO_TEXT");
+                            }}
                         />
                     )}
                     {screen === "sports" && <SportsSettingsScreen onBack={() => goto("main")} />}

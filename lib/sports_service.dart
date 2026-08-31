@@ -62,26 +62,38 @@ class SportsService {
 
   static Future<void> generateMorningBriefing() async {
     final prefs = await SharedPreferences.getInstance();
-    final isActive = prefs.getBool('SPORTS_ACTIVE') ?? false;
-    final sportType = prefs.getString('SPORTS_TYPE') ?? 'football';
-    final rawTeamName = prefs.getString('SPORTS_TEAM_NAME')?.trim();
+    final footballTeamsStr = prefs.getString('FOOTBALL_TEAMS')?.trim() ??
+        prefs.getString('SPORTS_TEAM_NAME')?.trim() ??
+        '';
+    final baseballTeamsStr = prefs.getString('BASEBALL_TEAMS')?.trim() ?? '';
 
-    if (isActive != true || rawTeamName == null || rawTeamName.isEmpty) {
+    final bool hasTeams = footballTeamsStr.isNotEmpty || baseballTeamsStr.isNotEmpty;
+    final isActive = prefs.getBool('SPORTS_ACTIVE') ?? hasTeams;
+
+    if (!isActive || !hasTeams) {
       return; // Disabled or no team configured
     }
 
-    final teamList = rawTeamName
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
+    if (baseballTeamsStr.isNotEmpty) {
+      final kboList = baseballTeamsStr
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (kboList.isNotEmpty) {
+        await _generateKboMultiBriefing(kboList);
+      }
+    }
 
-    if (teamList.isEmpty) return;
-
-    if (sportType == 'baseball') {
-      await _generateKboMultiBriefing(teamList);
-    } else {
-      await _generateFootballDataBriefing(teamList, prefs);
+    if (footballTeamsStr.isNotEmpty) {
+      final footballList = footballTeamsStr
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (footballList.isNotEmpty) {
+        await _generateFootballDataBriefing(footballList, prefs);
+      }
     }
   }
 
@@ -194,7 +206,7 @@ class SportsService {
 
   /// 축구 브리핑: Football-Data.org (영구 무료 12개 리그) + Firecrawl 전술 칼럼 크롤링
   static Future<void> _generateFootballDataBriefing(List<String> teamList, SharedPreferences prefs) async {
-    final token = prefs.getString('API_FOOTBALL_KEY')?.trim();
+    final token = (prefs.getString('FOOTBALL_DATA_API_KEY') ?? prefs.getString('API_FOOTBALL_KEY'))?.trim();
     if (token == null || token.isEmpty) {
       debugPrint('Football-Data.org token not set.');
       return;

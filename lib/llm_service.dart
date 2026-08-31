@@ -4,10 +4,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:network_info_plus/network_info_plus.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:battery_plus/battery_plus.dart';
 import 'local_storage_service.dart';
 import 'document_service.dart';
 import 'obsidian_service.dart';
 import 'playlist_service.dart';
+import 'meal_service.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
 
 /// generateResponse()의 반환값. 화면에 보여줄 text 외에,
 /// AI가 <update_calendar> 태그로 일정을 추가/수정했다면 그 결과
@@ -124,6 +130,25 @@ class LlmService {
     caseSensitive: false,
   );
 
+  static String _normalizeEndpoint(String rawUrl) {
+    String url = rawUrl.trim();
+    if (url.isEmpty) return 'https://integrate.api.nvidia.com/v1/chat/completions';
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://$url';
+    }
+    if (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    if (!url.endsWith('/chat/completions')) {
+      if (url.endsWith('/v1')) {
+        url = '$url/chat/completions';
+      } else {
+        url = '$url/v1/chat/completions';
+      }
+    }
+    return url;
+  }
+
   static Future<String?> _getApiKey() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('NVIDIA_NIM_API_KEY')?.trim();
@@ -132,7 +157,7 @@ class LlmService {
   static Future<String> _getEndpoint() async {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString('LLM_ENDPOINT')?.trim();
-    return (url != null && url.isNotEmpty) ? url : 'https://integrate.api.nvidia.com/v1/chat/completions';
+    return _normalizeEndpoint((url != null && url.isNotEmpty) ? url : 'https://integrate.api.nvidia.com/v1/chat/completions');
   }
 
   static Future<String?> _getVisionApiKey() async {
@@ -145,7 +170,7 @@ class LlmService {
   static Future<String> _getVisionEndpoint() async {
     final prefs = await SharedPreferences.getInstance();
     final vUrl = prefs.getString('VISION_ENDPOINT')?.trim();
-    if (vUrl != null && vUrl.isNotEmpty) return vUrl;
+    if (vUrl != null && vUrl.isNotEmpty) return _normalizeEndpoint(vUrl);
     return _getEndpoint();
   }
 
@@ -164,6 +189,90 @@ class LlmService {
     return 'meta/llama-3.2-11b-vision-instruct';
   }
 
+  static Future<String> _getLiveDeviceContext() async {
+    final now = DateTime.now();
+    final weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+    final weekdayStr = weekdays[now.weekday - 1];
+    final timeStr = '${now.year}년 ${now.month}월 ${now.day}일 (${weekdayStr}요일) ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    String wifiInfo = '네트워크 연결 없음';
+    String btInfo = 'Bluetooth 상태 알 수 없음';
+    String batteryInfo = '확인 불가';
+    Map<String, String>? school;
+
+    try {
+      await Future.wait([
+        // 1. 네트워크 체크
+        () async {
+          try {
+            final connectivityResult = await Connectivity().checkConnectivity();
+            if (connectivityResult.contains(ConnectivityResult.wifi)) {
+              final info = NetworkInfo();
+              final ssid = await info.getWifiName();
+              if (ssid != null && ssid.isNotEmpty && ssid != '<unknown ssid>') {
+                wifiInfo = '와이파이 연결됨 (${ssid.replaceAll('"', '')})';
+              } else {
+                wifiInfo = '와이파이 연결됨';
+              }
+            } else if (connectivityResult.contains(ConnectivityResult.mobile)) {
+              wifiInfo = '모바일 데이터 (LTE/5G) 연결됨';
+            }
+          } catch (_) {}
+        }(),
+
+        // 2. 블루투스 체크 (최대 100ms)
+        () async {
+          try {
+            final adapterState = await FlutterBluePlus.adapterState.first.timeout(
+              const Duration(milliseconds: 100),
+              onTimeout: () => BluetoothAdapterState.unknown,
+            );
+            if (adapterState == BluetoothAdapterState.on) {
+              final connected = FlutterBluePlus.connectedDevices;
+              if (connected.isNotEmpty) {
+                final names = connected
+                    .map((d) => d.platformName.isNotEmpty ? d.platformName : d.advName)
+                    .where((n) => n.isNotEmpty)
+                    .join(', ');
+                btInfo = names.isNotEmpty ? '연결된 블루투스 기기: $names' : 'Bluetooth 켜짐 (기기 있음)';
+              } else {
+                btInfo = 'Bluetooth 켜짐 (연결 안 됨)';
+              }
+            } else if (adapterState == BluetoothAdapterState.off) {
+              btInfo = 'Bluetooth 꺼짐';
+            }
+          } catch (_) {}
+        }(),
+
+        // 3. 배터리 체크 (최대 100ms)
+        () async {
+          try {
+            final battery = Battery();
+            final level = await battery.batteryLevel.timeout(const Duration(milliseconds: 100));
+            final state = await battery.batteryState.timeout(const Duration(milliseconds: 100));
+            final stateStr = state == BatteryState.charging ? '충전 중' : state == BatteryState.full ? '완충' : '배터리 사용 중';
+            batteryInfo = '$level% ($stateStr)';
+          } catch (_) {}
+        }(),
+
+        // 4. 등록된 학교 정보 (SharedPreferences 캐시)
+        () async {
+          school = await MealService.getSavedSchoolInfo();
+        }()
+      ]).timeout(const Duration(milliseconds: 300)); // 전체 통합 최대 타임아웃 300ms
+    } catch (_) {}
+
+    final schoolInfoStr = school?['schoolName']?.isNotEmpty == true ? school!['schoolName']! : '미등록';
+
+    return '''# 실시간 디바이스 & 시스템 상태 (Live Device Context)
+- 현재 시각: $timeStr
+- 네트워크/Wi-Fi: $wifiInfo
+- 블루투스: $btInfo
+- 배터리 잔량: $batteryInfo
+- 등록된 학교: $schoolInfoStr
+※ 사용자가 현재 시간, 네트워크(와이파이), 블루투스 연결 기기, 배터리 상태 등을 물어보면 위 실시간 디바이스 정보를 기반으로 정확하게 안내하세요.''';
+  }
+
   static Future<String> _getBaseSystemPrompt() async {
     try {
       return await rootBundle.loadString('assets/ev_system_prompt.md');
@@ -172,29 +281,37 @@ class LlmService {
     }
   }
 
-/// 사용자 메시지 내용에 따라 시스템 프롬프트를 구성한다.
-/// - memories.md와 <update_memory> 사용법은 매 턴 항상 붙인다
-///   (AI가 스스로 저장 여부를 판단할 수 있도록).
-/// - calendar.json / <update_calendar>, 문서 생성 안내는
-///   관련 키워드가 감지될 때만 조건부로 덧붙인다(토큰 절약).
- static Future<String> _buildSystemPrompt(
-  String basePrompt,
-  String userMessage, {
-  Function(String engine)? onSearchStart,
-}) async {
-  String prompt = basePrompt;
+  /// 사용자 메시지 내용에 따라 시스템 프롬프트를 구성한다.
+  static Future<String> _buildSystemPrompt(
+    String basePrompt,
+    String userMessage, {
+    Function(String engine)? onSearchStart,
+  }) async {
+    String prompt = basePrompt;
 
-  // memories.md는 매 턴 항상 붙인다 — AI가 스스로 저장 여부를 판단할 수 있게
-  final memories = await LocalStorageService.readMemories();
-  prompt += '\n\n# 사용자 기억 (memories.md)\n$memories';
+    // 1. 디바이스 상태 및 파일 내용들을 병렬로 한 번에 가져와서 속도 최적화
+    late String liveContext;
+    late String memories;
+    late List<Map<String, dynamic>> subjects;
+    late List<Map<String, dynamic>> schedule;
 
-  // 학습 과목 목록도 항상 붙인다 — AI가 문맥을 파악할 수 있도록
-  final subjects = await LocalStorageService.readSubjects();
-  prompt += '\n\n# 사용자 학습 과목 기록 (subject.json)\n${jsonEncode(subjects)}';
+    await Future.wait([
+      () async { liveContext = await _getLiveDeviceContext(); }(),
+      () async { memories = await LocalStorageService.readMemories(); }(),
+      () async { subjects = await LocalStorageService.readSubjects(); }(),
+      () async { schedule = await LocalStorageService.readScheduleEvents(); }(),
+    ]);
 
-  // 동적 시간표(학원/기숙사 등)를 항상 붙인다 — AI가 현재 시간에 뭘 해야 할지 알 수 있도록
-  final schedule = await LocalStorageService.readScheduleEvents();
-  prompt += '\n\n# 사용자 시간표 (schedule.json)\n${jsonEncode(schedule)}\n- 위 시간표를 참고하여 현재 시간에 맞는 행동(학원 가기, 취침 등)을 안내해라. 기존 프롬프트에 하드코딩된 시간표가 있다면 무시하고 오직 이 schedule.json 데이터를 우선해라.';
+    prompt = '$liveContext\n\n$prompt';
+
+    // memories.md는 매 턴 항상 붙인다 — AI가 스스로 저장 여부를 판단할 수 있게
+    prompt += '\n\n# 사용자 기억 (memories.md)\n$memories';
+
+    // 학습 과목 목록도 항상 붙인다 — AI가 문맥을 파악할 수 있도록
+    prompt += '\n\n# 사용자 학습 과목 기록 (subject.json)\n${jsonEncode(subjects)}';
+
+    // 동적 시간표(학원/기숙사 등)를 항상 붙인다 — AI가 현재 시간에 뭘 해야 할지 알 수 있도록
+    prompt += '\n\n# 사용자 시간표 (schedule.json)\n${jsonEncode(schedule)}\n- 위 시간표를 참고하여 현재 시간에 맞는 행동(학원 가기, 취침 등)을 안내해라. 기존 프롬프트에 하드코딩된 시간표가 있다면 무시하고 오직 이 schedule.json 데이터를 우선해라.';
 
   prompt += '\n\n# 기억을 추가/수정해야 할 때\n'
       '사용자 발화에서 지속적으로 유효한 개인 정보(성격, 취향, 진행 중인 일 등)를 '
@@ -330,6 +447,12 @@ class LlmService {
     String? base64Image,
     Function(String status, String engine)? onSearchStatus,
   }) async {
+    // 유튜브 URL 감지 시 구글 순정 SDK 분기로 위임
+    final youtubeRegex = RegExp(r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+', caseSensitive: false);
+    if (youtubeRegex.hasMatch(userMessage)) {
+      return _generateWithGoogleGenAI(userMessage, history, base64Image, onSearchStatus);
+    }
+
     // 개인정보 마스킹 적용
     final sanitizedUserMessage = await LocalStorageService.applyMasking(userMessage);
     final sanitizedHistory = <Map<String, String>>[];
@@ -358,6 +481,16 @@ class LlmService {
     final visionModelName = await _getVisionModel();
     final modelName = canSendImage ? visionModelName : mainModelName;
 
+    // 이미지 base64 포맷 표준화 (jpg -> jpeg 및 접두어 확인)
+    String? normalizedBase64Image = base64Image?.trim();
+    if (normalizedBase64Image != null && normalizedBase64Image.isNotEmpty) {
+      if (normalizedBase64Image.startsWith('data:image/jpg;')) {
+        normalizedBase64Image = normalizedBase64Image.replaceFirst('data:image/jpg;', 'data:image/jpeg;');
+      } else if (!normalizedBase64Image.startsWith('data:image/')) {
+        normalizedBase64Image = 'data:image/jpeg;base64,$normalizedBase64Image';
+      }
+    }
+
     String finalSystemPrompt = systemPrompt;
     if (canSendImage) {
       finalSystemPrompt += '\n\n# [비전(Vision) AI 분석 모드 활성화]\n'
@@ -371,26 +504,30 @@ class LlmService {
       return const LlmResponse('Error: API key not set.');
     }
 
+    debugPrint('LLM Request: endpoint=$endpoint, model=$modelName, canSendImage=$canSendImage, imageLength=${normalizedBase64Image?.length ?? 0}');
+
     try {
       final response = await http.post(
         Uri.parse(endpoint),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $apiKey',
+          if (endpoint.contains('openrouter.ai')) 'HTTP-Referer': 'https://evapp.local',
+          if (endpoint.contains('openrouter.ai')) 'X-Title': 'EV App',
         },
         body: jsonEncode({
           'model': modelName,
           'messages': [
             {'role': 'system', 'content': finalSystemPrompt},
             ...sanitizedHistory,
-            if (canSendImage)
+            if (canSendImage && normalizedBase64Image != null)
               {
                 'role': 'user',
                 'content': [
                   {'type': 'text', 'text': sanitizedUserMessage},
                   {
                     'type': 'image_url',
-                    'image_url': {'url': base64Image}
+                    'image_url': {'url': normalizedBase64Image}
                   }
                 ]
               }
@@ -400,7 +537,7 @@ class LlmService {
           'temperature': 0.7,
         }),
       ).timeout(const Duration(seconds: 120), onTimeout: () {
-        throw Exception('API 요청 시간이 초과되었습니다 (120초). 모델이 응답하는 데 너무 오래 걸립니다.');
+        throw Exception('API 요청 시간이 초과되었습니다 (120초). LLM 서버 지연 또는 오프라인 상태일 수 있습니다.');
       });
 
       if (response.statusCode == 200) {
@@ -408,167 +545,243 @@ class LlmService {
         String content =
             jsonResponse['choices'][0]['message']['content'] as String;
 
-        // AI가 실제로 일정을 추가/수정하라고 판단했다면 <update_calendar> 태그가
-        // 붙어 온다. 그 안의 JSON을 calendar.json에 실제로 병합하고, 태그 자체는
-        // 화면에 보여줄 텍스트에서 잘라낸다. 이제 캘린더 반영은 정규식으로 사용자
-        // 문장을 추측하던 데모 로직이 아니라, AI가 문맥을 보고 내린 판단을 그대로
-        // 따른다.
-        List<Map<String, dynamic>>? mergedEvents;
-        final tagMatch = _updateCalendarTag.firstMatch(content);
-        if (tagMatch != null) {
-          final rawJson = tagMatch.group(1)?.trim() ?? '[]';
-          
-          // 보다 견고한 JSON 추출: 첫 번째 '['와 마지막 ']' 사이를 추출
-          String cleanJson = rawJson;
-          int startIdx = rawJson.indexOf('[');
-          int endIdx = rawJson.lastIndexOf(']');
-          if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
-            cleanJson = rawJson.substring(startIdx, endIdx + 1);
-          }
-
-          try {
-            mergedEvents =
-                await LocalStorageService.mergeCalendarEventsFromJson(cleanJson);
-          } catch (e) {
-            debugPrint('Failed to merge <update_calendar> payload: $e\nJSON was: $cleanJson');
-          }
-          content = content.replaceFirst(tagMatch.group(0)!, '').trim();
-        }
-
-        // 마찬가지로 AI가 슬라이드/문서를 만들어야 한다고 판단했다면
-        // <generate_document> 태그가 붙어 온다. 여기서 실제로 reveal.js HTML과
-        // PDF 파일을 디스크에 만든다 — 예전처럼 타이머로 진행바만 채우고 끝나는
-        // 게 아니라, 진짜 산출물이 생긴다.
-        GeneratedDocument? document;
-        final docMatch = _generateDocumentTag.firstMatch(content);
-        if (docMatch != null) {
-          final rawJson = docMatch.group(1)?.trim() ?? '{}';
-          
-          // 보다 견고한 JSON 추출: 첫 번째 '{'와 마지막 '}' 사이를 추출
-          String cleanJson = rawJson;
-          int startIdx = rawJson.indexOf('{');
-          int endIdx = rawJson.lastIndexOf('}');
-          if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
-            cleanJson = rawJson.substring(startIdx, endIdx + 1);
-          }
-
-          try {
-            final decoded = jsonDecode(cleanJson);
-            if (decoded is Map) {
-              final deck = SlideDeck.fromJson(Map<String, dynamic>.from(decoded));
-              document = await DocumentService.saveDeck(deck);
-            }
-          } catch (e) {
-            debugPrint('Failed to build document from AI response: $e\nJSON was: $cleanJson');
-          }
-          content = content.replaceFirst(docMatch.group(0)!, '').trim();
-        }
-
-        // AI가 새로 기억해야 할 내용이 있다고 판단했다면 <update_memory> 태그가
-        // 붙어 온다. memories.md에 실제로 append하고, 태그 자체는 화면에 보여줄
-        // 텍스트에서 잘라낸다. 기존 내용과 완전히 같은 줄은 appendMemory() 안에서
-        // 자동으로 걸러진다.
-        String? updatedMemories;
-        final memMatch = _updateMemoryTag.firstMatch(content);
-        if (memMatch != null) {
-          final rawMemory = memMatch.group(1)?.trim() ?? '';
-          if (rawMemory.isNotEmpty) {
-            final cleanMemory = rawMemory.replaceAll(RegExp(r'^```[A-Za-z]*|```$', multiLine: true), '').trim();
-            try {
-              updatedMemories = await LocalStorageService.appendMemory(cleanMemory);
-            } catch (e) {
-              debugPrint('Failed to append <update_memory> payload: $e');
-            }
-          }
-          content = content.replaceFirst(memMatch.group(0)!, '').trim();
-        }
-
-        // 할 일(Todo) 업데이트 태그 처리
-        List<Map<String, dynamic>>? updatedTodo;
-        final todoMatch = _updateTodoTag.firstMatch(content);
-        if (todoMatch != null) {
-          final rawTodo = todoMatch.group(1)?.trim() ?? '';
-          if (rawTodo.isNotEmpty) {
-            try {
-              updatedTodo = await LocalStorageService.mergeTodoFromTags(rawTodo);
-            } catch (e) {
-              debugPrint('Failed to merge <update_todo> payload: $e');
-            }
-          }
-          content = content.replaceFirst(todoMatch.group(0)!, '').trim();
-        }
-
-        // 과목 업데이트 태그 처리
-        final subjectMatches = _updateSubjectTag.allMatches(content).toList();
-        for (var match in subjectMatches) {
-          final rawJson = match.group(1)?.trim() ?? '{}';
-          
-          // 보다 견고한 JSON 추출: 첫 번째 '{'와 마지막 '}' 사이를 추출
-          String cleanJson = rawJson;
-          int startIdx = rawJson.indexOf('{');
-          int endIdx = rawJson.lastIndexOf('}');
-          if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
-            cleanJson = rawJson.substring(startIdx, endIdx + 1);
-          }
-
-          try {
-            await LocalStorageService.mergeSubjectFromJson(cleanJson);
-          } catch (e) {
-            debugPrint('Failed to merge <update_subject> payload: $e\nJSON was: $cleanJson');
-          }
-          content = content.replaceFirst(match.group(0)!, '').trim();
-        }
-
-        // 옵시디언 노트 작성 태그
-        String? obsidianError;
-        bool obsidianSaved = false;
-        final obsMatch = _createObsidianTag.firstMatch(content);
-        if (obsMatch != null) {
-          final filename = obsMatch.group(1)?.trim() ?? 'Untitled.md';
-          final noteContent = obsMatch.group(2)?.trim() ?? '';
-          if (noteContent.isNotEmpty) {
-            try {
-              obsidianError = await ObsidianService.createNoteFromTag(filename, noteContent);
-              obsidianSaved = obsidianError == null;
-            } catch (e) {
-              obsidianError = e.toString();
-              debugPrint('Failed to create Obsidian note: $e');
-            }
-          }
-          content = content.replaceFirst(obsMatch.group(0)!, '').trim();
-        }
-
-        if (content.isEmpty) {
-          if (document != null) {
-            content = '${document.title} 만들었어. 아래 버튼으로 확인할 수 있어.';
-          } else if (mergedEvents != null) {
-            content = '일정을 반영했어.';
-          } else if (updatedTodo != null) {
-            content = '할 일을 반영했어.';
-          } else if (updatedMemories != null) {
-            content = '기억해뒀어.';
-          } else if (obsidianSaved) {
-            content = '옵시디언에 노트를 저장했어!';
-          } else if (obsidianError != null) {
-            content = '옵시디언 저장 실패: $obsidianError';
-          }
-        } else if (obsidianError != null) {
-          content += '\n\n(참고: 옵시디언 저장에 실패했습니다 - $obsidianError)';
-        }
-
-        return LlmResponse(
-          content,
-          calendarEvents: mergedEvents,
-          document: document,
-          updatedMemories: updatedMemories,
-          updatedTodo: updatedTodo,
-        );
+        return await _parseAiResponse(content);
       } else {
-        return LlmResponse('Error: API returned status ${response.statusCode}\n[Debug] Endpoint: $endpoint\n[Debug] Model: $modelName');
+        String errorMessage = 'Unknown error';
+        try {
+          final errorJson = jsonDecode(response.body);
+          if (errorJson['error'] != null) {
+            errorMessage = errorJson['error']['message'] ?? jsonEncode(errorJson['error']);
+          } else {
+            errorMessage = response.body;
+          }
+        } catch (_) {
+          errorMessage = response.body;
+        }
+        return LlmResponse('Error: Failed to reach LLM API. HTTP ${response.statusCode}\nDetails: $errorMessage\nEndpoint: $endpoint\nModel: $modelName');
       }
     } catch (e) {
-      return const LlmResponse('Error: Failed to reach LLM API.');
+      return LlmResponse('Error: Exception occurred.\nDetails: $e');
     }
+  }
+
+  static Future<LlmResponse> _parseAiResponse(String content) async {
+    List<Map<String, dynamic>>? mergedEvents;
+    final tagMatch = _updateCalendarTag.firstMatch(content);
+    if (tagMatch != null) {
+      final rawJson = tagMatch.group(1)?.trim() ?? '[]';
+      String cleanJson = rawJson;
+      int startIdx = rawJson.indexOf('[');
+      int endIdx = rawJson.lastIndexOf(']');
+      if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+        cleanJson = rawJson.substring(startIdx, endIdx + 1);
+      }
+      try {
+        mergedEvents = await LocalStorageService.mergeCalendarEventsFromJson(cleanJson);
+      } catch (e) {
+        debugPrint('Failed to merge <update_calendar> payload: $e\nJSON was: $cleanJson');
+      }
+      content = content.replaceFirst(tagMatch.group(0)!, '').trim();
+    }
+
+    GeneratedDocument? document;
+    final docMatch = _generateDocumentTag.firstMatch(content);
+    if (docMatch != null) {
+      final rawJson = docMatch.group(1)?.trim() ?? '{}';
+      String cleanJson = rawJson;
+      int startIdx = rawJson.indexOf('{');
+      int endIdx = rawJson.lastIndexOf('}');
+      if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+        cleanJson = rawJson.substring(startIdx, endIdx + 1);
+      }
+      try {
+        final decoded = jsonDecode(cleanJson);
+        if (decoded is Map) {
+          final deck = SlideDeck.fromJson(Map<String, dynamic>.from(decoded));
+          document = await DocumentService.saveDeck(deck);
+        }
+      } catch (e) {
+        debugPrint('Failed to build document from AI response: $e\nJSON was: $cleanJson');
+      }
+      content = content.replaceFirst(docMatch.group(0)!, '').trim();
+    }
+
+    String? updatedMemories;
+    final memMatch = _updateMemoryTag.firstMatch(content);
+    if (memMatch != null) {
+      final rawMemory = memMatch.group(1)?.trim() ?? '';
+      if (rawMemory.isNotEmpty) {
+        final cleanMemory = rawMemory.replaceAll(RegExp(r'^```[A-Za-z]*|```$', multiLine: true), '').trim();
+        try {
+          updatedMemories = await LocalStorageService.appendMemory(cleanMemory);
+        } catch (e) {
+          debugPrint('Failed to append <update_memory> payload: $e');
+        }
+      }
+      content = content.replaceFirst(memMatch.group(0)!, '').trim();
+    }
+
+    List<Map<String, dynamic>>? updatedTodo;
+    final todoMatch = _updateTodoTag.firstMatch(content);
+    if (todoMatch != null) {
+      final rawTodo = todoMatch.group(1)?.trim() ?? '';
+      if (rawTodo.isNotEmpty) {
+        try {
+          updatedTodo = await LocalStorageService.mergeTodoFromTags(rawTodo);
+        } catch (e) {
+          debugPrint('Failed to merge <update_todo> payload: $e');
+        }
+      }
+      content = content.replaceFirst(todoMatch.group(0)!, '').trim();
+    }
+
+    final subjectMatches = _updateSubjectTag.allMatches(content).toList();
+    for (var match in subjectMatches) {
+      final rawJson = match.group(1)?.trim() ?? '{}';
+      String cleanJson = rawJson;
+      int startIdx = rawJson.indexOf('{');
+      int endIdx = rawJson.lastIndexOf('}');
+      if (startIdx != -1 && endIdx != -1 && endIdx > startIdx) {
+        cleanJson = rawJson.substring(startIdx, endIdx + 1);
+      }
+      try {
+        await LocalStorageService.mergeSubjectFromJson(cleanJson);
+      } catch (e) {
+        debugPrint('Failed to merge <update_subject> payload: $e\nJSON was: $cleanJson');
+      }
+      content = content.replaceFirst(match.group(0)!, '').trim();
+    }
+
+    String? obsidianError;
+    bool obsidianSaved = false;
+    final obsMatch = _createObsidianTag.firstMatch(content);
+    if (obsMatch != null) {
+      final filename = obsMatch.group(1)?.trim() ?? 'Untitled.md';
+      final noteContent = obsMatch.group(2)?.trim() ?? '';
+      if (noteContent.isNotEmpty) {
+        try {
+          obsidianError = await ObsidianService.createNoteFromTag(filename, noteContent);
+          obsidianSaved = obsidianError == null;
+        } catch (e) {
+          obsidianError = e.toString();
+          debugPrint('Failed to create Obsidian note: $e');
+        }
+      }
+      content = content.replaceFirst(obsMatch.group(0)!, '').trim();
+    }
+
+    if (content.isEmpty) {
+      if (document != null) {
+        content = '${document.title} 만들었어. 아래 버튼으로 확인할 수 있어.';
+      } else if (mergedEvents != null) {
+        content = '일정을 반영했어.';
+      } else if (updatedTodo != null) {
+        content = '할 일을 반영했어.';
+      } else if (updatedMemories != null) {
+        content = '기억해뒀어.';
+      } else if (obsidianSaved) {
+        content = '옵시디언에 노트를 저장했어!';
+      } else if (obsidianError != null) {
+        content = '옵시디언 저장 실패: $obsidianError';
+      }
+    } else if (obsidianError != null) {
+      content += '\n\n(참고: 옵시디언 저장에 실패했습니다 - $obsidianError)';
+    }
+
+    return LlmResponse(
+      content,
+      calendarEvents: mergedEvents,
+      document: document,
+      updatedMemories: updatedMemories,
+      updatedTodo: updatedTodo,
+    );
+  }
+  static Future<LlmResponse> _generateWithGoogleGenAI(
+    String userMessage,
+    List<Map<String, String>> history,
+    String? base64Image,
+    Function(String status, String engine)? onSearchStatus,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('GOOGLE_GENAI_API_KEY') ?? '';
+    String modelName = (prefs.getString('GOOGLE_GENAI_MODEL') ?? '').trim();
+    if (modelName.isEmpty) {
+      modelName = 'gemini-3.7-flash';
+    }
+    // gemini-3.0-flash 입력 시 gemini-3-flash-preview 또는 gemini-3.7-flash 로 보정 지원
+    if (modelName == 'gemini-3.0-flash' || modelName == 'gemini-3.0') {
+      modelName = 'gemini-3.7-flash';
+    }
+    // 접두어 models/ 가 들어온 경우 정리
+    if (modelName.startsWith('models/')) {
+      modelName = modelName.replaceFirst('models/', '');
+    }
+
+    if (apiKey.isEmpty) {
+      return const LlmResponse('Error: GOOGLE GENAI API KEY 가 설정되지 않았습니다. API & MODEL MATRIX 화면에서 키를 입력해주세요.');
+    }
+
+    final List<String> candidateModels = [];
+    if (modelName.isNotEmpty && !candidateModels.contains(modelName)) {
+      candidateModels.add(modelName);
+    }
+    for (final m in [
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash',
+      'gemini-3-flash-preview',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+    ]) {
+      if (!candidateModels.contains(m)) candidateModels.add(m);
+    }
+
+    final baseSystemPrompt = await _getBaseSystemPrompt();
+    final finalSystemPrompt = await _buildSystemPrompt(
+      baseSystemPrompt,
+      userMessage,
+      onSearchStart: (engine) {
+        if (onSearchStatus != null) onSearchStatus('검색 중...', engine);
+      },
+    );
+
+    final List<Part> parts = [TextPart(userMessage)];
+    if (base64Image != null && base64Image.isNotEmpty) {
+      final commaIndex = base64Image.indexOf(',');
+      if (commaIndex != -1) {
+        final mimeType = base64Image.substring(5, commaIndex).split(';').first;
+        final base64String = base64Image.substring(commaIndex + 1);
+        parts.add(DataPart(mimeType, base64Decode(base64String)));
+      }
+    }
+
+    Object? lastError;
+    for (final candidate in candidateModels) {
+      try {
+        final model = GenerativeModel(
+          model: candidate,
+          apiKey: apiKey,
+          systemInstruction: Content.system(finalSystemPrompt),
+        );
+
+        final List<Content> chatHistory = [];
+        for (var h in history) {
+          final role = h['role'] == 'user' ? 'user' : 'model';
+          chatHistory.add(Content(role, [TextPart(h['content'] ?? '')]));
+        }
+
+        final chat = model.startChat(history: chatHistory);
+        final response = await chat.sendMessage(Content.multi(parts));
+        final text = response.text ?? 'No response text.';
+        return await _parseAiResponse(text);
+      } catch (e) {
+        lastError = e;
+        debugPrint('Gemini model ($candidate) failed: $e, trying next candidate...');
+      }
+    }
+
+    return LlmResponse('Error: Google GenAI (YouTube Summary) failed.\nDetails: $lastError');
   }
 
   static Future<String?> generateProactiveResponse(String contextPrompt, {String? systemPromptOverride}) async {
@@ -597,7 +810,7 @@ class LlmService {
           ],
           'temperature': 0.7,
         }),
-      );
+      ).timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
@@ -783,7 +996,7 @@ class LlmService {
           ],
           'temperature': 0.3,
         }),
-      );
+      ).timeout(const Duration(seconds: 120));
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);

@@ -94,7 +94,7 @@ class SearchService {
       final newsRes = await http.get(newsUrl, headers: {
         'X-Naver-Client-Id': clientId,
         'X-Naver-Client-Secret': clientSecret,
-      }).timeout(const Duration(seconds: 4));
+      }).timeout(const Duration(seconds: 12));
 
       if (newsRes.statusCode == 200) {
         final data = jsonDecode(newsRes.body);
@@ -116,7 +116,7 @@ class SearchService {
       final webRes = await http.get(webUrl, headers: {
         'X-Naver-Client-Id': clientId,
         'X-Naver-Client-Secret': clientSecret,
-      }).timeout(const Duration(seconds: 4));
+      }).timeout(const Duration(seconds: 12));
 
       if (webRes.statusCode == 200) {
         final data = jsonDecode(webRes.body);
@@ -149,7 +149,7 @@ class SearchService {
         'query': query,
         'search_depth': 'basic',
         'max_results': 3,
-      })).timeout(const Duration(seconds: 4));
+      })).timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
