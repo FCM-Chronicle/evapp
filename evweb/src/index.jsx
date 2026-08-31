@@ -1112,7 +1112,7 @@ function StatusBar({ onMenu, showBack, onBack, title, darkText = false, pinnedDd
                         >
                             <span className="w-1.5 h-1.5 rounded-full" style={{ background: pinnedDday.color || C.accent }} />
                             <span style={{ ...orbitron, color: pinnedDday.color || C.accent, fontSize: 10, fontWeight: 700 }}>
-                                {pinnedDday.dInfo.text}
+                                {pinnedDday.dInfo?.text || "D-DAY"}
                             </span>
                             <span className="truncate max-w-[80px]" style={{ ...sans, color: C.textBright, fontSize: 11 }}>
                                 {pinnedDday.title}
@@ -4464,7 +4464,20 @@ export default function EVApp() {
     const [sharedOcrData, setSharedOcrData] = useState(null);
     const [searchEngineStatus, setSearchEngineStatus] = useState(null);
     const [attachedFile, setAttachedFile] = useState(null);
+    const [ddays, setDdays] = useState([]);
+    const [schoolInfo, setSchoolInfo] = useState(null);
     const { maxWidth } = useResponsiveLayout();
+
+    const pinnedDday = useMemo(() => {
+        if (!ddays || ddays.length === 0) return null;
+        const pinned = ddays.find((d) => d.pinned);
+        const target = pinned || ddays[0];
+        if (!target) return null;
+        return {
+            ...target,
+            dInfo: calculateDDay(target.targetDate),
+        };
+    }, [ddays]);
 
     useEffect(() => {
         let attempts = 0;
@@ -4574,6 +4587,13 @@ export default function EVApp() {
                 case "archives_sync":
                 case "archives_list":
                     setArchivesList(payload.archives || []);
+                    break;
+                case "ddays_sync":
+                case "ddays_sync_init":
+                    if (payload.ddays) setDdays(payload.ddays);
+                    break;
+                case "school_info_sync":
+                    if (payload.schoolCode) setSchoolInfo(payload);
                     break;
                 case "wrong_notes_sync":
                     if (payload.notes) setWrongNotes(payload.notes);
@@ -4766,7 +4786,10 @@ export default function EVApp() {
                         <DDayScreen
                             onBack={() => goto("main")}
                             ddays={ddays}
-                            onSaveDdays={(list) => sendToFlutter("save_ddays", { ddays: list })}
+                            onSaveDdays={(list) => {
+                                setDdays(list);
+                                sendToFlutter("save_ddays", { ddays: list });
+                            }}
                         />
                     )}
                     {screen === "calendar" && <CalendarScreen onBack={() => goto("main")} calendarMd={calendarMd} />}

@@ -26,9 +26,11 @@ class LocalStorageService {
   static const String todoFileName = 'todo.md';
   static const String taskFileName = 'task.md';
   static const String maskingFileName = 'masking_rules.json';
+  static const String ddayFileName = 'dday.json';
 
   static const String defaultTodo = '# 오늘의 할 일 (Todo)\n\n- [ ] 예시: 이메일 확인하기\n';
   static const String defaultTask = '# Tasks\n\n복잡한 작업을 수행할 때 이곳에 계획을 세우고 하나씩 실행합니다.\n\n- `[ ]` uncompleted\n- `[/]` in progress\n- `[x]` completed\n';
+  static const String defaultDdayJson = '[]';
 
   static const String defaultMemories =
       '# memories.md\n\n- 사용자는 Flutter Webview 하이브리드 앱을 만들고 있음\n- 선호 톤: 간결, 기술적\n';
@@ -80,6 +82,7 @@ class LocalStorageService {
   static Future<File> get todoFile async => _fileFor(todoFileName);
   static Future<File> get taskFile async => _fileFor(taskFileName);
   static Future<File> get maskingFile async => _fileFor(maskingFileName);
+  static Future<File> get ddayFile async => _fileFor(ddayFileName);
 
   /// Reads memories.md, creating it with default content on first run.
   static Future<String> readMemories() async {
@@ -204,6 +207,39 @@ class LocalStorageService {
       return true;
     } catch (e) {
       debugPrint('LocalStorageService.writeScheduleEvents error: $e');
+      return false;
+    }
+  }
+
+  /// Reads dday.json, creating it with default content on first run.
+  static Future<List<Map<String, dynamic>>> readDdays() async {
+    try {
+      final file = await ddayFile;
+      String raw;
+      if (!await file.exists()) {
+        await file.writeAsString(defaultDdayJson);
+        raw = defaultDdayJson;
+      } else {
+        raw = await file.readAsString();
+      }
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        return decoded.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('LocalStorageService.readDdays error: $e');
+      return [];
+    }
+  }
+
+  static Future<bool> writeDdays(List<dynamic> ddays) async {
+    try {
+      final file = await ddayFile;
+      await file.writeAsString(jsonEncode(ddays));
+      return true;
+    } catch (e) {
+      debugPrint('LocalStorageService.writeDdays error: $e');
       return false;
     }
   }

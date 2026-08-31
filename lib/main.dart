@@ -681,6 +681,10 @@ class _EVHomePageState extends State<EVHomePage> {
         final todoItems = await LocalStorageService.readTodoItems();
         _sendToReact('todo_sync_init', {'content': todoContent, 'items': todoItems});
 
+        final ddays = await LocalStorageService.readDdays();
+        _sendToReact('ddays_sync_init', {'ddays': ddays});
+        _sendToReact('ddays_sync', {'ddays': ddays});
+
         final String? cachedImage = await const MethodChannel('com.example.evapp/methods').invokeMethod('getSharedImage');
         if (cachedImage != null) {
           _processSharedImage(cachedImage);
@@ -758,6 +762,15 @@ class _EVHomePageState extends State<EVHomePage> {
         if (schedule != null && schedule is List) {
           final ok = await LocalStorageService.writeScheduleEvents(schedule);
           _sendToReact('schedule_sync', {'schedule': schedule, 'success': ok});
+        }
+      } else if (action == 'get_ddays') {
+        final ddays = await LocalStorageService.readDdays();
+        _sendToReact('ddays_sync', {'ddays': ddays});
+      } else if (action == 'save_ddays') {
+        final ddays = payload['ddays'];
+        if (ddays != null && ddays is List) {
+          final ok = await LocalStorageService.writeDdays(ddays);
+          _sendToReact('ddays_sync', {'ddays': ddays, 'success': ok});
         }
       } else if (action == 'get_todo') {
         final todoContent = await LocalStorageService.readTodo();
